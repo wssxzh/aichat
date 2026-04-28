@@ -1,0 +1,36 @@
+services:
+  ai-chat-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-chat-web
+    init: true
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      API_BASE_URL: ${API_BASE_URL:-https://api.example.com}
+      API_KEY: ${API_KEY:-demo-key-change-me}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-demo-admin-password-change-me}
+      SESSION_TTL_MS: ${SESSION_TTL_MS:-28800000}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      RUNTIME_CONFIG_PATH: ${RUNTIME_CONFIG_PATH:-/data/runtime-config.json}
+      USERS_CONFIG_PATH: ${USERS_CONFIG_PATH:-/data/runtime-users.json}
+      ANNOUNCEMENTS_CONFIG_PATH: ${ANNOUNCEMENTS_CONFIG_PATH:-/data/runtime-announcements.json}
+      MAX_STORED_ANNOUNCEMENTS: ${MAX_STORED_ANNOUNCEMENTS:-80}
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - require('http').get('http://127.0.0.1:3000/healthz', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1));
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped

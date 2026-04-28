@@ -1,0 +1,22 @@
+{
+  "name": "wssxzh-ai-chat-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 对话 Web 项目（默认演示 API 配置）",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "check": "node --check server.js",
+    "docker:build": "docker build -t aichat-web:latest .",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f ai-chat-web"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}

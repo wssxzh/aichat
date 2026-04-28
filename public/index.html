@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="appShell" class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <div class="brand-row">
+            <div class="brand-badge">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 2.75a4.47 4.47 0 0 1 4.37 3.53 4.46 4.46 0 0 1 3.6 6.58 4.46 4.46 0 0 1-1.48 5.61 4.47 4.47 0 0 1-6.11 2.38 4.47 4.47 0 0 1-6.11-2.38 4.46 4.46 0 0 1-1.48-5.61 4.46 4.46 0 0 1 3.6-6.58A4.47 4.47 0 0 1 12 2.75Zm-2.4 4.54-1.76 1.02-.02 2.03 1.74 1.02 1.76-1.01.02-2.04-1.74-1.02Zm4.81 0-1.76 1.02-.02 2.03 1.74 1.02 1.76-1.01.02-2.04-1.74-1.02Zm-2.4 4.15-1.76 1.02-.02 2.03 1.74 1.02 1.76-1.01.02-2.04-1.74-1.02Z"
+                />
+              </svg>
+            </div>
+            <div>
+              <h1 class="brand-title">AI Chat</h1>
+            </div>
+            <button
+              id="sidebarCollapseButton"
+              class="icon-button sidebar-collapse-button"
+              type="button"
+              aria-label="收起侧栏"
+              aria-expanded="true"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 6 9 12l6 6" />
+              </svg>
+            </button>
+          </div>
+
+          <button id="newChatButton" class="new-chat-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            <span>新建对话</span>
+          </button>
+
+          <nav class="nav-stack" aria-label="左侧导航">
+            <button id="conversationNavButton" class="nav-item active" type="button" aria-pressed="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M6 7.5A3.5 3.5 0 0 1 9.5 4h5A3.5 3.5 0 0 1 18 7.5v3A3.5 3.5 0 0 1 14.5 14H12l-3.8 3.2c-.52.44-1.3.07-1.3-.61V14.6A3.48 3.48 0 0 1 6 10.5v-3Z"
+                />
+              </svg>
+              <span>对话</span>
+            </button>
+            <button id="modelNavButton" class="nav-item" type="button" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v2A2.5 2.5 0 0 1 17.5 12h-11A2.5 2.5 0 0 1 4 9.5v-2Zm0 7A2.5 2.5 0 0 1 6.5 12h11a2.5 2.5 0 0 1 0 5h-11A2.5 2.5 0 0 1 4 14.5v0Z" />
+              </svg>
+              <span>模型中心</span>
+            </button>
+            <button id="userNavButton" class="nav-item" type="button" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 13.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm-7 6.5a7 7 0 0 1 14 0" />
+              </svg>
+              <span>用户管理</span>
+            </button>
+            <button id="announcementNavButton" class="nav-item" type="button" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 11.5V8.8a1.8 1.8 0 0 1 1.8-1.8H8l7-3v16l-7-3H5.8A1.8 1.8 0 0 1 4 15.2v-3.7Zm4 5.5 1.2 3.2A1.6 1.6 0 0 0 10.7 21h.3" />
+              </svg>
+              <span>公告发布</span>
+            </button>
+          </nav>
+
+          <section id="conversationSection" class="sidebar-section conversation-list-section">
+            <div class="conversation-list-header">
+              <h2>最近对话</h2>
+            </div>
+            <div id="recentList" class="recent-list"></div>
+          </section>
+        </div>
+
+        <footer class="sidebar-footer">
+          <button id="adminAuthButton" class="profile-chip profile-auth-button" type="button" aria-label="打开登录面板">
+            <div class="profile-avatar">你</div>
+            <div class="profile-copy">
+              <strong id="adminAuthIdentityText">用户登录</strong>
+              <span id="adminAuthRoleBadge" class="guest">未登录</span>
+              <em id="adminAuthStatusText">点击登录或注册</em>
+            </div>
+            <span class="profile-arrow" aria-hidden="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 6l6 6-6 6" />
+              </svg>
+            </span>
+          </button>
+        </footer>
+      </aside>
+      <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+
+      <main class="workspace">
+        <button
+          id="sidebarMobileButton"
+          class="icon-button sidebar-mobile-button"
+          type="button"
+          aria-label="展开侧栏"
+          aria-expanded="false"
+          hidden
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" />
+          </svg>
+        </button>
+        <section id="chatWorkspace" class="workspace-card">
+          <header class="workspace-header">
+            <div class="model-switcher">
+              <div class="model-select-shell">
+                <div class="model-switcher-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 2.75a4.47 4.47 0 0 1 4.37 3.53 4.46 4.46 0 0 1 3.6 6.58 4.46 4.46 0 0 1-1.48 5.61 4.47 4.47 0 0 1-6.11 2.38 4.47 4.47 0 0 1-6.11-2.38 4.46 4.46 0 0 1-1.48-5.61 4.46 4.46 0 0 1 3.6-6.58A4.47 4.47 0 0 1 12 2.75Zm-2.4 4.54-1.76 1.02-.02 2.03 1.74 1.02 1.76-1.01.02-2.04-1.74-1.02Zm4.81 0-1.76 1.02-.02 2.03 1.74 1.02 1.76-1.01.02-2.04-1.74-1.02Zm-2.4 4.15-1.76 1.02-.02 2.03 1.74 1.02 1.76-1.01.02-2.04-1.74-1.02Z"
+                    />
+                  </svg>
+                </div>
+                <label class="visually-hidden" for="modelSelect">选择模型</label>
+                <select id="modelSelect" aria-label="选择模型">
+                  <option>正在加载模型...</option>
+                </select>
+              </div>
+              <p id="selectedModelMeta" class="selected-model-meta">模型加载完成后可以随时切换</p>
+            </div>
+
+            <div class="header-actions">
+              <button id="clearChatButton" class="icon-button" type="button" title="删除当前对话" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16M10 11v6M14 11v6M9 4h6l1 3H8l1-3Zm-2 3h10l-1 12H8L7 7Z" />
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          <div id="errorBanner" class="error-banner" hidden></div>
+
+          <section id="chatMessages" class="chat-stage"></section>
+
+          <div class="composer-dock">
+            <section id="settingsPanel" class="settings-panel" hidden>
+              <div class="settings-grid">
+                <label class="settings-field" for="systemPromptInput">
+                  <span>系统提示词</span>
+                  <textarea
+                    id="systemPromptInput"
+                    rows="3"
+                    placeholder="例如：你是一个简洁、专业、会先给结论再展开说明的中文助手。"
+                  ></textarea>
+                </label>
+
+                <label class="settings-field range-field" for="temperatureRange">
+                  <span>
+                    Temperature
+                    <strong id="temperatureValue">0.7</strong>
+                  </span>
+                  <input id="temperatureRange" type="range" min="0" max="2" step="0.1" value="0.7" />
+                  <small>值越低越稳，值越高越发散。</small>
+                </label>
+              </div>
+            </section>
+
+            <form id="chatForm" class="composer-card">
+              <label class="visually-hidden" for="userInput">输入消息</label>
+              <textarea
+                id="userInput"
+                class="composer-input"
+                rows="1"
+                placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+                autocomplete="off"
+              ></textarea>
+
+              <div class="composer-toolbar">
+                <div class="composer-meta">
+                  <button id="toggleSettingsButton" class="chip-button" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M12 3.5 13.8 7l3.8.55-2.76 2.69.65 3.8L12 12.28 8.51 14.04l.65-3.8L6.4 7.55 10.2 7 12 3.5Zm6.5 11 1.02 2 2.23.32-1.62 1.58.38 2.23-2-1.04-2.01 1.04.39-2.23-1.62-1.58 2.23-.32 1-2Zm-13 0 1 2 2.23.32-1.61 1.58.38 2.23-2-1.04-2 1.04.38-2.23L2.27 16.82l2.23-.32 1-2Z"
+                      />
+                    </svg>
+                    <span>高级设定</span>
+                  </button>
+                  <span id="composerHint" class="composer-hint">等待模型列表加载完成...</span>
+                </div>
+
+                <button id="sendButton" class="send-button" type="submit" disabled aria-label="发送消息">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 11.5 19 4l-4.5 16-3.28-6.22L4 11.5Zm7.22 2.28L19 4" />
+                  </svg>
+                </button>
+              </div>
+            </form>
+
+            <p class="composer-note">内容由 AI 生成，请结合实际情况甄别</p>
+          </div>
+        </section>
+
+        <section id="modelWorkspace" class="workspace-card model-workspace" hidden>
+          <header class="workspace-header">
+            <div class="workspace-title-block">
+              <h2>模型中心</h2>
+              <p id="connectionStatus" class="section-caption">正在检测连接状态...</p>
+            </div>
+
+            <div class="header-actions">
+              <button id="refreshModelsButton" class="toolbar-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
+                </svg>
+                <span>刷新模型</span>
+              </button>
+            </div>
+          </header>
+
+          <section class="model-workspace-body">
+            <div class="model-page-grid">
+              <section class="admin-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>API 配置</h3>
+                    <p>编辑当前对接的 API 地址与密钥，并保存到本地运行配置。</p>
+                  </div>
+                </div>
+
+                <div id="configStatusBanner" class="inline-banner" hidden></div>
+
+                <label class="settings-field" for="configApiBaseUrlInput">
+                  <span>API Base URL</span>
+                  <input
+                    id="configApiBaseUrlInput"
+                    class="text-input"
+                    type="url"
+                    placeholder="https://example.com"
+                    autocomplete="off"
+                  />
+                </label>
+
+                <label class="settings-field" for="configApiKeyInput">
+                  <span>API Key</span>
+                  <input
+                    id="configApiKeyInput"
+                    class="text-input"
+                    type="text"
+                    placeholder="输入 API 密钥"
+                    autocomplete="off"
+                  />
+                </label>
+
+                <div class="config-action-row">
+                  <button id="saveConfigButton" class="primary-inline-button" type="button">保存配置</button>
+                  <button id="testConfigButton" class="secondary-inline-button" type="button">测试连通性</button>
+                </div>
+
+                <div class="status-grid compact-grid">
+                  <div class="status-pill">
+                    <span>当前接口</span>
+                    <code id="apiBaseUrl">加载中...</code>
+                  </div>
+                  <div class="status-pill">
+                    <span>密钥状态</span>
+                    <strong id="keyStatus">检测中</strong>
+                  </div>
+                  <div class="status-pill">
+                    <span>模型数量</span>
+                    <strong id="modelStats">0 个模型</strong>
+                  </div>
+                </div>
+
+                <div id="configTestResult" class="result-box" hidden></div>
+
+                <section id="userAdminSection" class="user-admin-section">
+                  <div class="panel-heading">
+                    <div>
+                      <h3>用户管理</h3>
+                      <p>管理员可创建用户、切换角色，并删除无效账户。</p>
+                    </div>
+                  </div>
+
+                  <div id="userAdminBanner" class="inline-banner" hidden></div>
+
+                  <div class="user-create-grid">
+                    <label class="settings-field" for="createUserUsernameInput">
+                      <span>用户名</span>
+                      <input
+                        id="createUserUsernameInput"
+                        class="text-input"
+                        type="text"
+                        placeholder="3-24 位用户名"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="settings-field" for="createUserPasswordInput">
+                      <span>初始密码</span>
+                      <input
+                        id="createUserPasswordInput"
+                        class="text-input"
+                        type="password"
+                        placeholder="6-64 位密码"
+                        autocomplete="new-password"
+                      />
+                    </label>
+                    <label class="settings-field" for="createUserRoleSelect">
+                      <span>角色</span>
+                      <select id="createUserRoleSelect" class="text-input">
+                        <option value="user">普通用户</option>
+                        <option value="admin">管理员</option>
+                      </select>
+                    </label>
+                    <button id="createUserButton" class="primary-inline-button" type="button">创建用户</button>
+                  </div>
+
+                  <div id="userList" class="user-list">
+                    <div class="empty-state compact">登录管理员后加载用户列表...</div>
+                  </div>
+                </section>
+              </section>
+
+              <section class="admin-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>模型列表</h3>
+                    <p>支持搜索、切换当前会话模型，并查看该接口下全部模型。</p>
+                  </div>
+                </div>
+
+                <label class="search-shell" for="modelSearchInput">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm5.2 12.2L20 20" />
+                  </svg>
+                  <input
+                    id="modelSearchInput"
+                    type="search"
+                    placeholder="搜索模型名或提供方"
+                    autocomplete="off"
+                  />
+                </label>
+
+                <div id="modelList" class="model-list">
+                  <div class="empty-state compact">正在拉取模型列表...</div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </section>
+
+        <section id="userWorkspace" class="workspace-card model-workspace" hidden>
+          <header class="workspace-header">
+            <div class="workspace-title-block">
+              <h2>用户管理</h2>
+              <p class="section-caption">管理员可创建用户、切换角色，并删除无效账户。</p>
+            </div>
+          </header>
+
+          <section class="model-workspace-body">
+            <div class="model-page-grid single-column">
+              <section id="userWorkspacePanel" class="admin-panel"></section>
+            </div>
+          </section>
+        </section>
+        <section id="announcementWorkspace" class="workspace-card model-workspace" hidden>
+          <header class="workspace-header">
+            <div class="workspace-title-block">
+              <h2>公告发布</h2>
+              <p class="section-caption">管理员可发布最新公告，登录用户将在对话页看到。</p>
+            </div>
+          </header>
+
+          <section class="model-workspace-body">
+            <div class="model-page-grid single-column">
+              <section class="admin-panel">
+                <div id="announcementBanner" class="inline-banner" hidden></div>
+
+                <div class="announcement-editor-grid">
+                  <label class="settings-field" for="announcementTitleInput">
+                    <span>公告标题（可选）</span>
+                    <input
+                      id="announcementTitleInput"
+                      class="text-input"
+                      type="text"
+                      maxlength="120"
+                      placeholder="例如：系统维护通知"
+                      autocomplete="off"
+                    />
+                  </label>
+
+                  <label class="settings-field" for="announcementContentInput">
+                    <span>公告内容</span>
+                    <textarea
+                      id="announcementContentInput"
+                      rows="4"
+                      maxlength="4000"
+                      placeholder="请输入需要展示给所有登录用户的公告内容"
+                    ></textarea>
+                  </label>
+                </div>
+
+                <div class="announcement-actions">
+                  <button id="publishAnnouncementButton" class="primary-inline-button" type="button">发布公告</button>
+                </div>
+
+                <div id="announcementList" class="announcement-list">
+                  <div class="empty-state compact">暂无公告，可在上方发布。</div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div id="announcementNotice" class="announcement-notice" hidden>
+      <div class="announcement-notice-card" role="dialog" aria-modal="true" aria-labelledby="announcementNoticeTitle">
+        <div class="announcement-notice-head">
+          <h3 id="announcementNoticeTitle" class="announcement-notice-title">最新公告</h3>
+          <button
+            id="announcementNoticeCloseButton"
+            class="announcement-notice-close"
+            type="button"
+            aria-label="关闭公告弹窗"
+            title="关闭公告弹窗"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 7l10 10M17 7 7 17" />
+            </svg>
+          </button>
+        </div>
+        <p id="announcementNoticeMeta" class="announcement-notice-meta"></p>
+        <div id="announcementNoticeText" class="announcement-notice-text"></div>
+      </div>
+    </div>
+
+    <div id="confirmDialog" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmDialogTitle">
+        <div class="modal-badge">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16M10 11v6M14 11v6M9 4h6l1 3H8l1-3Zm-2 3h10l-1 12H8L7 7Z" />
+          </svg>
+        </div>
+        <div class="modal-copy">
+          <h3 id="confirmDialogTitle">删除当前对话？</h3>
+          <p id="confirmDialogMessage">此操作不可撤销。</p>
+        </div>
+        <div class="modal-actions">
+          <button id="confirmDialogCancelButton" class="secondary-inline-button" type="button">取消</button>
+          <button id="confirmDialogConfirmButton" class="danger-inline-button" type="button">确认删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="adminAuthDialog" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adminAuthDialogTitle">
+        <div class="modal-badge">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 10V8a5 5 0 0 1 10 0v2m-9 0h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" />
+          </svg>
+        </div>
+        <div class="modal-copy">
+          <h3 id="adminAuthDialogTitle">用户登录</h3>
+          <p id="adminAuthDialogDescription">输入用户名和密码进行登录。没有账号可直接注册。</p>
+          <label class="settings-field" for="adminAuthUsernameInput">
+            <span>用户名</span>
+            <input
+              id="adminAuthUsernameInput"
+              class="text-input"
+              type="text"
+              placeholder="请输入用户名"
+              autocomplete="username"
+            />
+          </label>
+          <label class="settings-field" for="adminAuthPasswordInput">
+            <span>密码</span>
+            <input
+              id="adminAuthPasswordInput"
+              class="text-input"
+              type="password"
+              placeholder="请输入密码"
+              autocomplete="current-password"
+            />
+          </label>
+          <button id="adminAuthModeToggleButton" class="mini-link-button auth-mode-button" type="button">
+            没有账号？去注册
+          </button>
+          <p id="adminAuthError" class="auth-error" hidden></p>
+        </div>
+        <div class="modal-actions">
+          <button id="adminAuthCancelButton" class="secondary-inline-button" type="button">取消</button>
+          <button id="adminAuthSubmitButton" class="primary-inline-button" type="button">登录</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
