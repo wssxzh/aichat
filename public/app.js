@@ -152,6 +152,18 @@ const state = {
     loadedCount: 0,
     signature: ""
   },
+  conversationSync: {
+    bootstrapping: false,
+    loadingRemote: false,
+    savingRemote: false,
+    pendingSaveTimer: null,
+    pendingSavePromise: null,
+    pendingSaveResolve: null,
+    pendingSaveReject: null,
+    saveVersion: 0,
+    lastSavedVersion: 0,
+    currentAccountKey: defaultConversationAccountKey
+  },
   configForm: {
     apiBaseUrl: "",
     apiKey: "",
@@ -450,6 +462,161 @@ function loadScopedStorageMap(storageKey) {
   return parsed;
 }
 
+function clearScopedStorageEntry(storageKey, scopedKey) {
+  const scopedMap = loadScopedStorageMap(storageKey);
+  delete scopedMap[scopedKey];
+  writeStorageItem(storageKey, JSON.stringify(scopedMap));
+}
+
+function clearLocalConversationCacheForAccount(accountKey = state.conversationAccountKey) {
+  clearScopedStorageEntry(storageKeys.conversationsByAccount, accountKey);
+  clearScopedStorageEntry(storageKeys.activeConversationIdByAccount, accountKey);
+}
+
+function isAuthenticatedConversationAccount(accountKey = state.conversationAccountKey) {
+  return typeof accountKey === "string" && accountKey.startsWith("user:");
+}
+
+function buildConversationStatePayload() {
+  return {
+    conversations: state.conversations.map((conversation) => ({
+      ...conversation,
+      messages: conversation.messages.map((message) => ({
+        ...message,
+        streaming: false
+      }))
+    })),
+    activeConversationId: state.activeConversationId || ""
+  };
+}
+
+function applyConversationStateFromPayload(payload = {}) {
+  const nextConversations = Array.isArray(payload?.conversations)
+    ? payload.conversations.map(sanitizeStoredConversation)
+    : [];
+  const nextActiveConversationId =
+    typeof payload?.activeConversationId === "string" ? payload.activeConversationId : "";
+
+  state.conversations = nextConversations;
+  state.activeConversationId = nextActiveConversationId;
+  ensureConversationState();
+  synchronizeConversationModels();
+}
+
+async function loadRemoteConversationState(accountKey = state.conversationAccountKey) {
+  if (!isAuthenticatedConversationAccount(accountKey)) {
+    return false;
+  }
+
+  state.conversationSync.loadingRemote = true;
+
+  try {
+    const response = await fetch("/api/conversations");
+    const payload = await response.json();
+
+    if (response.status === 401) {
+      throw new Error("登录状态已失效，请重新登录。");
+    }
+
+    if (!response.ok) {
+      throw new Error(parseErrorPayload(payload, "加载云端会话失败。"));
+    }
+
+    if (state.conversationAccountKey !== accountKey) {
+      return false;
+    }
+
+    applyConversationStateFromPayload(payload);
+    state.conversationSync.lastSavedVersion = state.conversationSync.saveVersion;
+    return true;
+  } catch (error) {
+    console.warn("Failed to load cloud conversations.", error);
+    return false;
+  } finally {
+    state.conversationSync.loadingRemote = false;
+  }
+}
+
+async function saveRemoteConversationStateNow() {
+  if (!isAuthenticatedConversationAccount()) {
+    return true;
+  }
+
+  if (state.conversationSync.savingRemote) {
+    return state.conversationSync.pendingSavePromise || true;
+  }
+
+  if (state.conversationSync.lastSavedVersion === state.conversationSync.saveVersion) {
+    return true;
+  }
+
+  state.conversationSync.savingRemote = true;
+  const payload = buildConversationStatePayload();
+
+  const requestPromise = (async () => {
+    try {
+      const response = await fetch("/api/conversations", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+
+      if (response.status === 401) {
+        throw new Error("登录状态已失效，请重新登录。");
+      }
+
+      if (!response.ok) {
+        throw new Error(parseErrorPayload(result, "保存云端会话失败。"));
+      }
+
+      state.conversationSync.lastSavedVersion = state.conversationSync.saveVersion;
+      return true;
+    } catch (error) {
+      console.warn("Failed to save cloud conversations.", error);
+      return false;
+    } finally {
+      state.conversationSync.savingRemote = false;
+      state.conversationSync.pendingSavePromise = null;
+    }
+  })();
+
+  state.conversationSync.pendingSavePromise = requestPromise;
+  return requestPromise;
+}
+
+function queueRemoteConversationSave() {
+  if (!isAuthenticatedConversationAccount()) {
+    return;
+  }
+
+  state.conversationSync.saveVersion += 1;
+
+  if (state.conversationSync.pendingSaveTimer) {
+    clearTimeout(state.conversationSync.pendingSaveTimer);
+  }
+
+  state.conversationSync.pendingSaveTimer = setTimeout(() => {
+    state.conversationSync.pendingSaveTimer = null;
+    saveRemoteConversationStateNow();
+  }, 320);
+}
+
+async function flushRemoteConversationSave() {
+  if (!isAuthenticatedConversationAccount()) {
+    return true;
+  }
+
+  if (state.conversationSync.pendingSaveTimer) {
+    clearTimeout(state.conversationSync.pendingSaveTimer);
+    state.conversationSync.pendingSaveTimer = null;
+  }
+
+  return saveRemoteConversationStateNow();
+}
+
 function getDismissedAnnouncementIdForAccount(accountKey = state.conversationAccountKey) {
   const scopedDismissedAnnouncementId =
     loadScopedStorageMap(storageKeys.dismissedAnnouncementIdByAccount)[accountKey];
@@ -537,21 +704,49 @@ function loadStoredActiveConversationId(accountKey = state.conversationAccountKe
   return "";
 }
 
-function loadConversationStateForAccount(accountKey) {
+async function loadConversationStateForAccount(accountKey) {
   state.conversationAccountKey = accountKey || defaultConversationAccountKey;
-  state.conversations = loadStoredConversations(state.conversationAccountKey);
-  state.activeConversationId = loadStoredActiveConversationId(state.conversationAccountKey);
+  state.conversationSync.currentAccountKey = state.conversationAccountKey;
   state.announcements.dismissedLatestId = getDismissedAnnouncementIdForAccount(state.conversationAccountKey);
   state.openRecentMenuConversationId = "";
   state.recentList.loadedCount = 0;
   state.recentList.signature = "";
-  ensureConversationState();
-  synchronizeConversationModels();
-  persistConversationState();
+
+  if (isAuthenticatedConversationAccount(state.conversationAccountKey)) {
+    const loadedRemote = await loadRemoteConversationState(state.conversationAccountKey);
+    const remoteConversationCount = state.conversations.length;
+    const localFallbackConversations = loadStoredConversations(state.conversationAccountKey);
+    const localFallbackActiveConversationId = loadStoredActiveConversationId(state.conversationAccountKey);
+    const remoteHasHistory = state.conversations.some(conversationHasHistory);
+    const localHasHistory = localFallbackConversations.some(conversationHasHistory);
+
+    if ((!loadedRemote || !remoteHasHistory) && localHasHistory) {
+      state.conversations = localFallbackConversations;
+      state.activeConversationId = localFallbackActiveConversationId;
+      ensureConversationState();
+      synchronizeConversationModels();
+      queueRemoteConversationSave();
+      clearLocalConversationCacheForAccount(state.conversationAccountKey);
+    } else {
+      ensureConversationState();
+      synchronizeConversationModels();
+
+      if (!loadedRemote || remoteConversationCount < 1) {
+        queueRemoteConversationSave();
+      }
+    }
+  } else {
+    state.conversations = loadStoredConversations(state.conversationAccountKey);
+    state.activeConversationId = loadStoredActiveConversationId(state.conversationAccountKey);
+    ensureConversationState();
+    synchronizeConversationModels();
+    persistConversationState();
+  }
+
   syncConversationControls();
 }
 
-function switchConversationStateByUser(
+async function switchConversationStateByUser(
   nextAuthenticated = state.adminAuth.authenticated,
   nextUser = state.adminAuth.user
 ) {
@@ -562,8 +757,8 @@ function switchConversationStateByUser(
   }
 
   try {
-    persistConversationState();
-    loadConversationStateForAccount(nextAccountKey);
+    await flushRemoteConversationSave();
+    await loadConversationStateForAccount(nextAccountKey);
     clearError();
     elements.userInput.value = "";
     autoResizeComposer();
@@ -634,6 +829,13 @@ function getActiveConversation() {
 }
 
 function persistConversationState() {
+  const accountKey = state.conversationAccountKey || defaultConversationAccountKey;
+
+  if (isAuthenticatedConversationAccount(accountKey)) {
+    queueRemoteConversationSave();
+    return true;
+  }
+
   const payload = state.conversations.map((conversation) => ({
     ...conversation,
     messages: conversation.messages.map((message) => ({
@@ -641,8 +843,6 @@ function persistConversationState() {
       streaming: false
     }))
   }));
-
-  const accountKey = state.conversationAccountKey || defaultConversationAccountKey;
   const conversationsByAccount = loadScopedStorageMap(storageKeys.conversationsByAccount);
   const activeConversationIdByAccount = loadScopedStorageMap(storageKeys.activeConversationIdByAccount);
 
@@ -1206,11 +1406,11 @@ async function loadAdminAuthStatus() {
 
     state.adminAuth.authenticated = Boolean(payload.authenticated && payload.user);
     state.adminAuth.user = payload.user || null;
-    switchConversationStateByUser(state.adminAuth.authenticated, state.adminAuth.user);
+    await switchConversationStateByUser(state.adminAuth.authenticated, state.adminAuth.user);
   } catch (error) {
     state.adminAuth.authenticated = false;
     state.adminAuth.user = null;
-    switchConversationStateByUser(false, null);
+    await switchConversationStateByUser(false, null);
   } finally {
     state.adminAuth.checking = false;
     renderAdminAuthState();
@@ -1221,7 +1421,7 @@ async function loadAdminAuthStatus() {
 function handleAdminUnauthorized(message = "登录已失效，请重新登录。") {
   state.adminAuth.authenticated = false;
   state.adminAuth.user = null;
-  switchConversationStateByUser(false, null);
+  void switchConversationStateByUser(false, null);
   clearAdminConfigState();
   clearAdminUsersState();
   clearAdminAnnouncementsState();
@@ -1282,7 +1482,7 @@ async function loginAdmin() {
     const nextTabAfterLogin = state.adminAuth.nextTabAfterLogin;
     state.adminAuth.authenticated = true;
     state.adminAuth.user = payload.user || null;
-    switchConversationStateByUser(state.adminAuth.authenticated, state.adminAuth.user);
+    await switchConversationStateByUser(state.adminAuth.authenticated, state.adminAuth.user);
     renderAdminAuthState();
 
     if (isAdminUser()) {
@@ -1348,7 +1548,7 @@ async function logoutAdmin() {
 
     state.adminAuth.authenticated = false;
     state.adminAuth.user = null;
-    switchConversationStateByUser(false, null);
+    await switchConversationStateByUser(false, null);
     clearAdminConfigState();
     clearAdminUsersState();
     clearAdminAnnouncementsState();
@@ -4130,8 +4330,8 @@ function toggleSettingsPanel() {
   elements.toggleSettingsButton.classList.toggle("active", !nextHidden);
 }
 
-function bootstrapConversationState() {
-  loadConversationStateForAccount(state.conversationAccountKey);
+async function bootstrapConversationState() {
+  await loadConversationStateForAccount(state.conversationAccountKey);
 }
 
 function setConfigButtonsState() {
@@ -4191,7 +4391,7 @@ function setLoading(isLoading) {
 }
 
 async function bootstrap() {
-  bootstrapConversationState();
+  await bootstrapConversationState();
   mountUserAdminSection();
   applySidebarLayoutState();
   renderSidebarNavigation();

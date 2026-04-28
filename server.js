@@ -24,10 +24,30 @@ const usersConfigPath = process.env.USERS_CONFIG_PATH
 const announcementsConfigPath = process.env.ANNOUNCEMENTS_CONFIG_PATH
   ? path.resolve(process.env.ANNOUNCEMENTS_CONFIG_PATH)
   : path.join(__dirname, ".runtime-announcements.json");
+const conversationsConfigPath = process.env.CONVERSATIONS_CONFIG_PATH
+  ? path.resolve(process.env.CONVERSATIONS_CONFIG_PATH)
+  : path.join(__dirname, ".runtime-conversations.json");
 const maxStoredAnnouncements = Math.max(
   1,
   Number(process.env.MAX_STORED_ANNOUNCEMENTS || process.env.ANNOUNCEMENTS_MAX_ITEMS) || 80
 );
+const maxStoredConversationsPerUser = Math.min(
+  300,
+  Math.max(1, Number(process.env.MAX_STORED_CONVERSATIONS_PER_USER) || 120)
+);
+const maxMessagesPerConversation = Math.min(
+  1200,
+  Math.max(1, Number(process.env.MAX_MESSAGES_PER_CONVERSATION) || 320)
+);
+const maxConversationMessageLength = Math.min(
+  64000,
+  Math.max(200, Number(process.env.MAX_CONVERSATION_MESSAGE_LENGTH) || 12000)
+);
+const maxConversationSystemPromptLength = Math.min(
+  32000,
+  Math.max(50, Number(process.env.MAX_CONVERSATION_SYSTEM_PROMPT_LENGTH) || 6000)
+);
+const maxConversationTitleLength = 120;
 const sessionCookieName = "aichat_session";
 const sessionTtlMs = Math.max(
   5 * 60 * 1000,
@@ -45,7 +65,7 @@ if (defaultAdminPassword === "demo-admin-password-change-me") {
   );
 }
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "4mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 function parseCookies(cookieHeader) {
@@ -548,6 +568,208 @@ function removeStoredAnnouncement(announcementId) {
   persistAnnouncementsStore();
 
   return removed;
+}
+
+function clampConversationTemperature(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return 0.7;
+  }
+
+  return Math.min(2, Math.max(0, numeric));
+}
+
+function normalizeConversationFeedback(value) {
+  return value === "like" || value === "dislike" ? value : "";
+}
+
+function normalizeConversationRole(value) {
+  return value === "assistant" ? "assistant" : "user";
+}
+
+function compactConversationText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function deriveConversationTitle(messages) {
+  const firstUserMessage = Array.isArray(messages)
+    ? messages.find((message) => message.role === "user" && compactConversationText(message.content))
+    : null;
+
+  if (!firstUserMessage) {
+    return "New chat";
+  }
+
+  const sourceText = compactConversationText(firstUserMessage.content);
+
+  if (!sourceText) {
+    return "New chat";
+  }
+
+  return sourceText.length > 24 ? `${sourceText.slice(0, 24)}...` : sourceText;
+}
+
+function sanitizeConversationMessage(input) {
+  const content = String(input?.content || "").slice(0, maxConversationMessageLength);
+  const timestamp = Number(input?.timestamp) || Date.now();
+  const model = typeof input?.model === "string" ? input.model.slice(0, 200) : "";
+  const id = typeof input?.id === "string" && input.id.trim()
+    ? input.id.trim().slice(0, 120)
+    : `message-${crypto.randomUUID()}`;
+
+  return {
+    id,
+    role: normalizeConversationRole(input?.role),
+    content,
+    model,
+    timestamp,
+    feedback: normalizeConversationFeedback(input?.feedback),
+    streaming: false
+  };
+}
+
+function sanitizeConversationRecord(input) {
+  const createdAt = Number(input?.createdAt) || Date.now();
+  const messages = Array.isArray(input?.messages)
+    ? input.messages.map(sanitizeConversationMessage).slice(-maxMessagesPerConversation)
+    : [];
+  const title = compactConversationText(input?.title).slice(0, maxConversationTitleLength);
+
+  return {
+    id: typeof input?.id === "string" && input.id.trim()
+      ? input.id.trim().slice(0, 120)
+      : `conversation-${crypto.randomUUID()}`,
+    title: title || deriveConversationTitle(messages),
+    createdAt,
+    updatedAt: Number(input?.updatedAt) || createdAt,
+    modelId: typeof input?.modelId === "string" ? input.modelId.slice(0, 200) : "",
+    systemPrompt: typeof input?.systemPrompt === "string"
+      ? input.systemPrompt.slice(0, maxConversationSystemPromptLength)
+      : "",
+    temperature: clampConversationTemperature(input?.temperature),
+    pinned: Boolean(input?.pinned),
+    messages
+  };
+}
+
+function sortConversations(left, right) {
+  if (Boolean(left?.pinned) !== Boolean(right?.pinned)) {
+    return left?.pinned ? -1 : 1;
+  }
+
+  return Number(right?.updatedAt || 0) - Number(left?.updatedAt || 0);
+}
+
+function sanitizeUserConversationsState(input) {
+  const conversations = Array.isArray(input?.conversations)
+    ? input.conversations.map(sanitizeConversationRecord).sort(sortConversations).slice(0, maxStoredConversationsPerUser)
+    : [];
+  const providedActiveConversationId =
+    typeof input?.activeConversationId === "string" ? input.activeConversationId.trim().slice(0, 120) : "";
+  const resolvedActiveConversationId =
+    conversations.some((conversation) => conversation.id === providedActiveConversationId)
+      ? providedActiveConversationId
+      : conversations[0]?.id || "";
+
+  return {
+    conversations,
+    activeConversationId: resolvedActiveConversationId,
+    updatedAt: Number(input?.updatedAt) || Date.now()
+  };
+}
+
+function readConversationsStore() {
+  if (!fs.existsSync(conversationsConfigPath)) {
+    return {
+      users: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+
+  try {
+    const raw = fs.readFileSync(conversationsConfigPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const nextUsers = {};
+    const usersNode = parsed?.users && typeof parsed.users === "object" ? parsed.users : {};
+
+    for (const [userId, userState] of Object.entries(usersNode)) {
+      const normalizedUserId = String(userId || "").trim();
+
+      if (!normalizedUserId) {
+        continue;
+      }
+
+      nextUsers[normalizedUserId] = sanitizeUserConversationsState(userState);
+    }
+
+    return {
+      users: nextUsers,
+      createdAt: Number(parsed?.createdAt) || Date.now(),
+      updatedAt: Number(parsed?.updatedAt) || Date.now()
+    };
+  } catch (error) {
+    console.warn("Failed to read conversations config:", error);
+    return {
+      users: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+}
+
+let conversationsStore = readConversationsStore();
+
+function persistConversationsStore() {
+  conversationsStore.updatedAt = Date.now();
+
+  fs.writeFileSync(
+    conversationsConfigPath,
+    JSON.stringify(
+      {
+        users: conversationsStore.users,
+        createdAt: conversationsStore.createdAt,
+        updatedAt: conversationsStore.updatedAt
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+}
+
+function getUserConversationsState(userId) {
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!normalizedUserId) {
+    return sanitizeUserConversationsState(null);
+  }
+
+  if (!conversationsStore.users[normalizedUserId]) {
+    conversationsStore.users[normalizedUserId] = sanitizeUserConversationsState(null);
+  }
+
+  return sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+}
+
+function saveUserConversationsState(userId, payload) {
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!normalizedUserId) {
+    const userIdError = new Error("Invalid user id");
+    userIdError.status = 400;
+    throw userIdError;
+  }
+
+  const sanitized = sanitizeUserConversationsState(payload);
+  conversationsStore.users[normalizedUserId] = {
+    ...sanitized,
+    updatedAt: Date.now()
+  };
+  persistConversationsStore();
+
+  return sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
 }
 
 function toPublicUser(user) {
@@ -1106,6 +1328,32 @@ app.get("/api/announcements", requireAuth, (request, response) => {
   });
 });
 
+app.get("/api/conversations", requireAuth, (request, response) => {
+  const conversationState = getUserConversationsState(request.currentUser.id);
+
+  response.json({
+    conversations: conversationState.conversations,
+    activeConversationId: conversationState.activeConversationId
+  });
+});
+
+app.put("/api/conversations", requireAuth, (request, response, next) => {
+  try {
+    const savedState = saveUserConversationsState(request.currentUser.id, {
+      conversations: request.body?.conversations,
+      activeConversationId: request.body?.activeConversationId
+    });
+
+    response.json({
+      conversations: savedState.conversations,
+      activeConversationId: savedState.activeConversationId,
+      updatedAt: savedState.updatedAt
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use("/api/admin", requireAdmin);
 
 app.get("/api/admin/announcements", (request, response) => {
@@ -1321,6 +1569,10 @@ app.delete("/api/admin/users/:id", (request, response, next) => {
 
     usersStore.users = projectedUsers;
     persistUsersStore();
+    if (conversationsStore.users[targetUser.id]) {
+      delete conversationsStore.users[targetUser.id];
+      persistConversationsStore();
+    }
     invalidateUserSessions(targetUser.id);
 
     response.json({

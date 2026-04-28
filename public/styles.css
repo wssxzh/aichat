@@ -2170,7 +2170,7 @@ input[type="range"] {
   }
 
   .workspace {
-    padding-top: 56px;
+    padding-top: 14px;
   }
 
   .model-workspace-body {
@@ -2200,17 +2200,52 @@ input[type="range"] {
   .composer-dock,
   .chat-stage,
   .model-workspace-body {
-    padding-left: 16px;
-    padding-right: 16px;
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .workspace-header {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 58px;
+    min-height: 52px;
   }
 
   .header-actions {
+    margin-left: auto;
     justify-content: flex-end;
+    flex-shrink: 0;
+  }
+
+  .model-switcher {
+    flex: 1;
+    min-width: 0;
+    gap: 0;
+  }
+
+  .model-select-shell {
+    width: 100%;
+    min-height: 42px;
+    border-radius: 14px;
+  }
+
+  .model-select-shell select {
+    min-height: 42px;
+    padding-right: 40px;
+    font-size: 0.95rem;
+  }
+
+  .model-switcher-icon {
+    width: 32px;
+    height: 32px;
+    left: 10px;
+  }
+
+  .selected-model-meta {
+    display: none;
   }
 
   .settings-grid {
@@ -2245,8 +2280,8 @@ input[type="range"] {
 
 @media (max-width: 640px) {
   .app-shell {
-    padding: 10px;
-    gap: 12px;
+    padding: 8px;
+    gap: 10px;
   }
 
   .sidebar-footer {
@@ -2260,6 +2295,7 @@ input[type="range"] {
 
   .model-select-shell {
     width: 100%;
+    border-radius: 12px;
   }
 
   .toolbar-button span,
@@ -2274,8 +2310,19 @@ input[type="range"] {
   }
 
   .sidebar-mobile-button {
-    top: 14px;
-    left: 14px;
+    top: 10px;
+    left: 10px;
+    width: 38px;
+    min-height: 38px;
+    border-radius: 12px;
+  }
+
+  .workspace-header {
+    padding-left: 52px;
+    padding-right: 10px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    min-height: 46px;
   }
 
   .composer-toolbar {

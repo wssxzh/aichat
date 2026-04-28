@@ -196,3 +196,10 @@ npm run docker:down
 ## 12. 文档索引
 
 - 生产部署与排障手册：[`DEPLOYMENT.md`](./DEPLOYMENT.md)
+## 会话持久化（跨设备）
+
+- 登录用户的会话数据会持久化到服务端接口 `GET/PUT /api/conversations`，不再依赖浏览器 `localStorage`。
+- 游客模式（未登录）仍使用本地临时会话。
+- 新增环境变量：
+  - `CONVERSATIONS_CONFIG_PATH`（默认：`.runtime-conversations.json`）
+  - `MAX_STORED_CONVERSATIONS_PER_USER`（默认：`120`）

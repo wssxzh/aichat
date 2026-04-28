@@ -20,7 +20,9 @@ services:
       RUNTIME_CONFIG_PATH: ${RUNTIME_CONFIG_PATH:-/data/runtime-config.json}
       USERS_CONFIG_PATH: ${USERS_CONFIG_PATH:-/data/runtime-users.json}
       ANNOUNCEMENTS_CONFIG_PATH: ${ANNOUNCEMENTS_CONFIG_PATH:-/data/runtime-announcements.json}
+      CONVERSATIONS_CONFIG_PATH: ${CONVERSATIONS_CONFIG_PATH:-/data/runtime-conversations.json}
       MAX_STORED_ANNOUNCEMENTS: ${MAX_STORED_ANNOUNCEMENTS:-80}
+      MAX_STORED_CONVERSATIONS_PER_USER: ${MAX_STORED_CONVERSATIONS_PER_USER:-120}
     volumes:
       - aichat-data:/data
     healthcheck:

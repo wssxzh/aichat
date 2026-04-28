@@ -264,3 +264,11 @@ docker compose --env-file .env.production config
 # 查看健康状态
 docker inspect --format='{{json .State.Health}}' ai-chat-web
 ```
+## 会话数据落盘
+
+新增环境变量：
+
+- `CONVERSATIONS_CONFIG_PATH`：会话持久化文件路径（建议生产设置为 `/data/runtime-conversations.json`）。
+- `MAX_STORED_CONVERSATIONS_PER_USER`：每个用户最大保留会话数（默认 120）。
+
+应用通过 `GET/PUT /api/conversations` 保存登录用户的会话，支持跨设备同步。
