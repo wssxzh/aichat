@@ -8,7 +8,7 @@ services:
       BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://localhost:8080/}
       FORCE_OWNERSHIP: "true"
     volumes:
-      - searxng-config:/etc/searxng
+      - ./searxng:/etc/searxng
       - searxng-cache:/var/cache/searxng
     restart: unless-stopped
 
@@ -29,9 +29,11 @@ services:
       WEB_SEARCH_SERVER_ENABLED: ${WEB_SEARCH_SERVER_ENABLED:-true}
       WEB_SEARCH_DEFAULT_ENABLED: ${WEB_SEARCH_DEFAULT_ENABLED:-false}
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
+      SEARXNG_FALLBACK_BASE_URL: ${SEARXNG_FALLBACK_BASE_URL:-}
       SEARXNG_SEARCH_PATH: ${SEARXNG_SEARCH_PATH:-/search}
       SEARXNG_RESULT_COUNT: ${SEARXNG_RESULT_COUNT:-5}
       SEARXNG_TIMEOUT_MS: ${SEARXNG_TIMEOUT_MS:-12000}
+      SEARXNG_USER_AGENT: "${SEARXNG_USER_AGENT:-Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)}"
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-demo-admin-password-change-me}
       SESSION_TTL_MS: ${SESSION_TTL_MS:-28800000}
@@ -58,5 +60,4 @@ services:
 
 volumes:
   aichat-data:
-  searxng-config:
   searxng-cache:

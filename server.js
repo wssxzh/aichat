@@ -46,6 +46,11 @@ const searxngSearchPath = (() => {
 })();
 const searxngLanguage = String(process.env.SEARXNG_LANGUAGE || "").trim();
 const searxngSafeSearch = String(process.env.SEARXNG_SAFESEARCH || "").trim();
+const searxngUserAgent = String(
+  process.env.SEARXNG_USER_AGENT ||
+    "Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)"
+).trim();
+const searxngFallbackBaseUrl = trimTrailingSlashes(String(process.env.SEARXNG_FALLBACK_BASE_URL || "").trim());
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH
   ? path.resolve(process.env.RUNTIME_CONFIG_PATH)
   : path.join(__dirname, ".runtime-config.json");
@@ -983,7 +988,11 @@ function serializeConfigForClient(includeApiKey = false) {
     apiBaseUrl: config.apiBaseUrl,
     apiKey: includeApiKey ? config.apiKey : undefined,
     apiKeyPreview: maskApiKey(config.apiKey),
-    keyConfigured: Boolean(config.apiKey)
+    keyConfigured: Boolean(config.apiKey),
+    webSearch: {
+      serverEnabled: webSearchServerEnabled,
+      defaultEnabled: webSearchDefaultEnabled
+    }
   };
 }
 
@@ -1088,7 +1097,7 @@ function requestJson(url, { method = "GET", headers = {}, body, timeout = defaul
 }
 
 function isRetryableNetworkError(error) {
-  return ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ECONNREFUSED", "EPIPE"].includes(error.code);
+  return ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ECONNREFUSED", "EPIPE", "ENOTFOUND"].includes(error.code);
 }
 
 function isRetryableStatus(status) {
@@ -1298,8 +1307,8 @@ function normalizeSearxngResult(item) {
   };
 }
 
-async function fetchSearxngResults(query) {
-  const searchUrl = new URL(searxngSearchPath, `${searxngBaseUrl}/`);
+function buildSearxngSearchUrl(baseUrl, query) {
+  const searchUrl = new URL(searxngSearchPath, `${trimTrailingSlashes(baseUrl)}/`);
   searchUrl.searchParams.set("q", query);
   searchUrl.searchParams.set("format", "json");
   searchUrl.searchParams.set("count", String(webSearchResultCount));
@@ -1312,22 +1321,69 @@ async function fetchSearxngResults(query) {
     searchUrl.searchParams.set("safesearch", searxngSafeSearch);
   }
 
-  const upstreamResponse = await requestJsonWithRetry(
-    searchUrl.toString(),
-    { timeout: webSearchTimeoutMs },
-    2
-  );
+  return searchUrl;
+}
 
-  if (!upstreamResponse.ok) {
-    throw createUpstreamError(upstreamResponse);
+function extractSearxngResultItems(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+
+  if (results.length) {
+    return results;
   }
 
-  const results = Array.isArray(upstreamResponse.data?.results) ? upstreamResponse.data.results : [];
+  if (typeof payload?.error === "string" && payload.error.trim()) {
+    const error = new Error(payload.error.trim());
+    error.status = 502;
+    throw error;
+  }
 
-  return results
-    .map(normalizeSearxngResult)
-    .filter(Boolean)
-    .slice(0, webSearchResultCount);
+  return [];
+}
+
+async function fetchSearxngResults(query) {
+  const candidateBaseUrls = [searxngBaseUrl];
+  if (searxngFallbackBaseUrl && searxngFallbackBaseUrl !== searxngBaseUrl) {
+    candidateBaseUrls.push(searxngFallbackBaseUrl);
+  } else if (searxngBaseUrl.includes("://searxng")) {
+    candidateBaseUrls.push("http://127.0.0.1:8080");
+  }
+
+  let lastError = null;
+
+  for (const baseUrl of candidateBaseUrls) {
+    const searchUrl = buildSearxngSearchUrl(baseUrl, query);
+
+    try {
+      const upstreamResponse = await requestJsonWithRetry(
+        searchUrl.toString(),
+        {
+          timeout: webSearchTimeoutMs,
+          headers: {
+            Accept: "application/json",
+            "User-Agent": searxngUserAgent
+          }
+        },
+        2
+      );
+
+      if (!upstreamResponse.ok) {
+        const error = createUpstreamError(upstreamResponse);
+        error.url = searchUrl.toString();
+        throw error;
+      }
+
+      const results = extractSearxngResultItems(upstreamResponse.data);
+      return results
+        .map(normalizeSearxngResult)
+        .filter(Boolean)
+        .slice(0, webSearchResultCount);
+    } catch (error) {
+      error.url = error.url || searchUrl.toString();
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("SearXNG search failed.");
 }
 
 function buildWebSearchContextMessage(query, results) {
@@ -1418,7 +1474,13 @@ async function enrichPayloadWithWebSearch(payload, requestBody) {
       messages: injectWebSearchContext(payload.messages, query, searchResults)
     };
   } catch (error) {
-    console.warn("SearXNG web search failed, falling back to model-only mode:", error.message || error);
+    console.warn("SearXNG web search failed, falling back to model-only mode:", {
+      query,
+      detail: truncateText(error.message || String(error), 800),
+      code: error.code || null,
+      status: Number(error.status) || null,
+      url: error.url || null
+    });
     return payload;
   }
 }
@@ -1467,6 +1529,40 @@ function readConfigFromBody(body, fallbackToRuntime = false) {
 
 app.get("/api/config", (request, response) => {
   response.json(serializeConfigForClient(false));
+});
+
+app.get("/api/web-search/status", requireAuth, async (request, response) => {
+  const query = compactConversationText(request.query?.q || "") || "OpenAI";
+
+  if (!webSearchServerEnabled) {
+    return response.json({
+      enabled: false,
+      connected: false,
+      query,
+      detail: "Server-side web search is disabled."
+    });
+  }
+
+  try {
+    const results = await fetchSearxngResults(query);
+    response.json({
+      enabled: true,
+      connected: true,
+      query,
+      resultCount: results.length,
+      sample: results.slice(0, 3)
+    });
+  } catch (error) {
+    response.status(503).json({
+      enabled: true,
+      connected: false,
+      query,
+      detail: truncateText(error.message || "SearXNG request failed.", 800),
+      code: error.code || null,
+      status: Number(error.status) || null,
+      url: error.url || null
+    });
+  }
 });
 
 app.get("/api/auth/status", (request, response) => {

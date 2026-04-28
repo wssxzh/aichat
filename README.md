@@ -220,3 +220,26 @@ Environment variables:
 Notes:
 - When web search is enabled in UI, frontend sends `webEnabled=true` with chat request.
 - If SearXNG is unavailable, backend automatically falls back to normal model-only chat.
+- The frontend default toggle now follows server config (`WEB_SEARCH_DEFAULT_ENABLED`) when browser has no saved preference.
+
+### SearXNG Runtime Files
+
+This repo now ships a built-in SearXNG config directory:
+
+- `searxng/settings.yml`
+- `searxng/limiter.toml`
+
+Important defaults in `settings.yml`:
+- Enable JSON output (`search.formats` includes `json`), required by backend API integration.
+- Disable noisy failing engines (`ahmia`, `torch`, `wikidata`).
+- Disable limiter by default for simple internal deployment (`server.limiter: false`).
+
+### Quick Connectivity Check
+
+After login, you can check backend-to-SearXNG connectivity:
+
+```bash
+curl -b "<your-cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
+```
+
+If connected, response contains `"connected": true` and sample search results.

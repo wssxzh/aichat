@@ -128,6 +128,8 @@ const iconMarkup = {
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7.5A3.5 3.5 0 0 1 10.5 4h5A3.5 3.5 0 0 1 19 7.5v3a3.5 3.5 0 0 1-3.5 3.5H13l-3.55 2.9A.9.9 0 0 1 8 16.2V14.5A3.5 3.5 0 0 1 7 10.5v-3Z" /></svg>'
 };
 
+const storedWebSearchPreference = readStorageItem(storageKeys.webSearchEnabled);
+
 const state = {
   apiBaseUrl: "",
   keyConfigured: false,
@@ -142,7 +144,9 @@ const state = {
       ? readStorageItem(storageKeys.sidebarTab)
       : "conversations"),
   loading: false,
-  webSearchEnabled: readStorageItem(storageKeys.webSearchEnabled) === "1",
+  webSearchEnabled: storedWebSearchPreference === "1",
+  webSearchPreferenceSynced: storedWebSearchPreference !== null,
+  webSearchFeatureEnabled: true,
   abortController: null,
   typingController: null,
   sidebarUi: {
@@ -273,10 +277,15 @@ function renderWebSearchToggle() {
     return;
   }
 
-  const enabled = Boolean(state.webSearchEnabled);
+  const featureEnabled = Boolean(state.webSearchFeatureEnabled);
+  const enabled = Boolean(featureEnabled && state.webSearchEnabled);
+  elements.webSearchToggleButton.hidden = !featureEnabled;
+  elements.webSearchToggleButton.disabled = !featureEnabled;
   elements.webSearchToggleButton.classList.toggle("active", enabled);
   elements.webSearchToggleButton.setAttribute("aria-pressed", String(enabled));
-  elements.webSearchToggleButton.title = enabled ? "Web Search: On" : "Web Search: Off";
+  elements.webSearchToggleButton.title = featureEnabled
+    ? (enabled ? "Web Search: On" : "Web Search: Off")
+    : "Web Search: Disabled";
 }
 
 function setWebSearchEnabled(enabled, options = {}) {
@@ -284,6 +293,7 @@ function setWebSearchEnabled(enabled, options = {}) {
   state.webSearchEnabled = Boolean(enabled);
 
   if (persist) {
+    state.webSearchPreferenceSynced = true;
     writeStorageItem(storageKeys.webSearchEnabled, state.webSearchEnabled ? "1" : "0");
   }
 
@@ -3670,6 +3680,15 @@ async function loadServerConfig() {
 
   state.apiBaseUrl = payload.apiBaseUrl || "";
   state.keyConfigured = Boolean(payload.keyConfigured);
+  const webSearchConfig =
+    payload.webSearch && typeof payload.webSearch === "object" ? payload.webSearch : {};
+  state.webSearchFeatureEnabled = webSearchConfig.serverEnabled !== false;
+
+  if (!state.webSearchPreferenceSynced) {
+    setWebSearchEnabled(Boolean(webSearchConfig.defaultEnabled), { persist: false });
+  }
+
+  renderWebSearchToggle();
   renderConfigSummary();
 }
 
@@ -4274,7 +4293,7 @@ async function sendMessage(event) {
     model: activeConversation.modelId,
     temperature: clampTemperature(activeConversation.temperature),
     messages: buildRequestMessages(),
-    webEnabled: state.webSearchEnabled
+    webEnabled: Boolean(state.webSearchFeatureEnabled && state.webSearchEnabled)
   };
 
   const assistantMessage = createAssistantMessage(activeConversation.modelId);

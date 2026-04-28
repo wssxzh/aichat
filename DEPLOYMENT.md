@@ -276,19 +276,31 @@ docker inspect --format='{{json .State.Health}}' ai-chat-web
 
 ## 13. SearXNG Integration
 
-The compose file now includes a built-in `searxng` service and wires AI Chat to it by default.
+The compose file includes a built-in `searxng` service and wires AI Chat to it by default.
+It now uses repository-managed config files:
+
+- `./searxng/settings.yml -> /etc/searxng/settings.yml`
+- `./searxng/limiter.toml -> /etc/searxng/limiter.toml`
 
 Key variables in `.env.production`:
 - `SEARXNG_BASE_URL=http://searxng:8080`
+- `SEARXNG_FALLBACK_BASE_URL=` (optional, useful for non-compose fallback)
 - `SEARXNG_SEARCH_PATH=/search`
 - `SEARXNG_RESULT_COUNT=5`
 - `SEARXNG_TIMEOUT_MS=12000`
+- `SEARXNG_USER_AGENT=Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)`
 - `WEB_SEARCH_SERVER_ENABLED=true`
 - `WEB_SEARCH_DEFAULT_ENABLED=false`
 
 Bring up services:
 ```bash
 docker compose --env-file .env.production up -d --build
+```
+
+Recreate if you already had old volumes/config:
+```bash
+docker compose --env-file .env.production down --remove-orphans
+docker compose --env-file .env.production up -d --build --force-recreate
 ```
 
 Check SearXNG container:
@@ -300,4 +312,23 @@ docker compose logs --tail=100 searxng
 Verify local SearXNG API:
 ```bash
 curl "http://127.0.0.1:8080/search?q=openai&format=json"
+```
+
+Verify app-side web search pipeline (requires login cookie):
+```bash
+curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
+```
+
+Expected: `"connected": true`.
+
+If SearXNG logs include `ahmia/torch/wikidata` load errors:
+- They are now disabled by default in `searxng/settings.yml`.
+- Recreate the `searxng` container to apply updated config.
+
+If chat still answers without web grounding:
+- Confirm UI `Web` toggle is ON.
+- Confirm `/api/web-search/status` returns `connected: true`.
+- Check `ai-chat-web` logs for `SearXNG web search failed...` details:
+```bash
+docker compose logs --tail=200 ai-chat-web
 ```
