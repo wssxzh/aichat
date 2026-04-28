@@ -2170,7 +2170,7 @@ input[type="range"] {
   }
 
   .workspace {
-    padding-top: 14px;
+    padding-top: 0;
   }
 
   .model-workspace-body {
@@ -2207,11 +2207,11 @@ input[type="range"] {
   .workspace-header {
     flex-direction: row;
     align-items: center;
-    gap: 10px;
-    padding-top: 10px;
-    padding-bottom: 10px;
-    padding-left: 58px;
-    min-height: 52px;
+    gap: 8px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 56px;
+    min-height: 0;
   }
 
   .header-actions {
@@ -2228,20 +2228,20 @@ input[type="range"] {
 
   .model-select-shell {
     width: 100%;
-    min-height: 42px;
-    border-radius: 14px;
+    min-height: 40px;
+    border-radius: 12px;
   }
 
   .model-select-shell select {
-    min-height: 42px;
-    padding-right: 40px;
-    font-size: 0.95rem;
+    min-height: 40px;
+    padding-right: 38px;
+    font-size: 0.92rem;
   }
 
   .model-switcher-icon {
-    width: 32px;
-    height: 32px;
-    left: 10px;
+    width: 30px;
+    height: 30px;
+    left: 9px;
   }
 
   .selected-model-meta {
@@ -2310,19 +2310,19 @@ input[type="range"] {
   }
 
   .sidebar-mobile-button {
-    top: 10px;
-    left: 10px;
+    top: 12px;
+    left: 12px;
     width: 38px;
     min-height: 38px;
     border-radius: 12px;
   }
 
   .workspace-header {
-    padding-left: 52px;
-    padding-right: 10px;
-    padding-top: 8px;
-    padding-bottom: 8px;
-    min-height: 46px;
+    padding-left: 50px;
+    padding-right: 8px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    min-height: 0;
   }
 
   .composer-toolbar {
