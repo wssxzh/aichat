@@ -1382,7 +1382,6 @@ function openAdminAuthDialog(nextTab = "", mode = "login") {
   elements.adminAuthPasswordInput.value = "";
   renderAuthDialogMode();
   elements.adminAuthDialog.hidden = false;
-  elements.adminAuthUsernameInput.focus();
 }
 
 function closeAdminAuthDialog() {
@@ -1509,11 +1508,8 @@ async function loginAdmin() {
       setSidebarTab(nextTabAfterLogin);
 
       if (nextTabAfterLogin === "users") {
-        elements.createUserUsernameInput.focus();
       } else if (nextTabAfterLogin === "announcements") {
-        elements.announcementTitleInput.focus();
       } else {
-        elements.modelSearchInput.focus();
       }
     } else if (
       nextTabAfterLogin === "models" ||
@@ -1956,7 +1952,6 @@ async function deleteConversationById(conversationId, options = {}) {
   if (wasActiveConversation) {
     elements.userInput.value = "";
     autoResizeComposer();
-    elements.userInput.focus();
   }
 
   return true;
@@ -2959,7 +2954,6 @@ function focusComposerWithText(text) {
   setSidebarTab("conversations");
   elements.userInput.value = text;
   autoResizeComposer();
-  elements.userInput.focus();
 }
 
 function createMessageElement(message) {
@@ -3555,7 +3549,6 @@ function focusComposerWithText(text) {
   setSidebarTab("conversations");
   elements.userInput.value = text;
   autoResizeComposer();
-  elements.userInput.focus();
 }
 
 function refreshConversationMetadata(conversation) {
@@ -3599,9 +3592,6 @@ function setConversationModel(modelId) {
   renderModelList();
   updateSelectedModelView();
   renderMessages();
-  if (state.activeSidebarTab === "conversations") {
-    elements.userInput.focus();
-  }
 }
 
 function setActiveConversation(conversationId) {
@@ -3624,7 +3614,6 @@ function setActiveConversation(conversationId) {
   updateSelectedModelView();
   renderMessages();
   setSidebarTab("conversations");
-  elements.userInput.focus();
 }
 
 function createNewConversation() {
@@ -3648,7 +3637,6 @@ function createNewConversation() {
   setSidebarTab("conversations");
   elements.userInput.value = "";
   autoResizeComposer();
-  elements.userInput.focus();
 }
 
 async function loadServerConfig() {
@@ -4303,7 +4291,6 @@ async function sendMessage(event) {
     syncMessageElement(assistantMessage);
     renderConversationList();
     renderMessages();
-    elements.userInput.focus();
   }
 }
 
@@ -4459,7 +4446,6 @@ async function bootstrap() {
     }
 
     setSidebarTab("models");
-    elements.modelSearchInput.focus();
   });
   elements.userNavButton.addEventListener("click", () => {
     if (!requireAdminAccess("users")) {
@@ -4467,7 +4453,6 @@ async function bootstrap() {
     }
 
     setSidebarTab("users");
-    elements.createUserUsernameInput.focus();
   });
   elements.announcementNavButton.addEventListener("click", () => {
     if (!requireAdminAccess("announcements")) {
@@ -4475,7 +4460,6 @@ async function bootstrap() {
     }
 
     setSidebarTab("announcements");
-    elements.announcementTitleInput.focus();
   });
   if (elements.announcementNoticeCloseButton) {
     elements.announcementNoticeCloseButton.addEventListener("click", closeAnnouncementNotice);

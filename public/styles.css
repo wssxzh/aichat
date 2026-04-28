@@ -2356,6 +2356,26 @@ input[type="range"] {
     min-height: 0;
   }
 
+  #userWorkspace > .workspace-header,
+  #announcementWorkspace > .workspace-header {
+    min-height: 46px;
+    padding-top: 0;
+    padding-bottom: 0;
+    align-items: center;
+  }
+
+  #userWorkspace > .workspace-header .workspace-title-block,
+  #announcementWorkspace > .workspace-header .workspace-title-block {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+  }
+
+  #userWorkspace > .workspace-header .workspace-title-block h2,
+  #announcementWorkspace > .workspace-header .workspace-title-block h2 {
+    line-height: 1;
+  }
+
   .composer-toolbar {
     align-items: center;
   }
