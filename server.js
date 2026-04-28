@@ -15,6 +15,37 @@ const port = Number(process.env.PORT) || 3000;
 const host = process.env.HOST || "0.0.0.0";
 const defaultRequestTimeoutMs = 60000;
 const chatRequestTimeoutMs = 120000;
+const webSearchTimeoutMs = Math.min(
+  45000,
+  Math.max(3000, Number(process.env.SEARXNG_TIMEOUT_MS) || 12000)
+);
+const webSearchResultCount = Math.min(
+  8,
+  Math.max(1, Number(process.env.SEARXNG_RESULT_COUNT) || 5)
+);
+const webSearchSnippetMaxLength = Math.min(
+  1200,
+  Math.max(120, Number(process.env.SEARXNG_SNIPPET_MAX_LENGTH) || 320)
+);
+const webSearchContextMaxLength = Math.min(
+  16000,
+  Math.max(1500, Number(process.env.SEARXNG_CONTEXT_MAX_LENGTH) || 7200)
+);
+const webSearchServerEnabled =
+  String(process.env.WEB_SEARCH_SERVER_ENABLED || "true").trim().toLowerCase() !== "false";
+const webSearchDefaultEnabled =
+  String(process.env.WEB_SEARCH_DEFAULT_ENABLED || "false").trim().toLowerCase() === "true";
+const searxngBaseUrl = trimTrailingSlashes(process.env.SEARXNG_BASE_URL || "http://127.0.0.1:8080");
+const searxngSearchPath = (() => {
+  const raw = String(process.env.SEARXNG_SEARCH_PATH || "/search").trim();
+  if (!raw) {
+    return "/search";
+  }
+
+  return raw.startsWith("/") ? raw : `/${raw}`;
+})();
+const searxngLanguage = String(process.env.SEARXNG_LANGUAGE || "").trim();
+const searxngSafeSearch = String(process.env.SEARXNG_SAFESEARCH || "").trim();
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH
   ? path.resolve(process.env.RUNTIME_CONFIG_PATH)
   : path.join(__dirname, ".runtime-config.json");
@@ -1194,6 +1225,204 @@ function buildChatPayload(body, { stream = false } = {}) {
   return { payload };
 }
 
+function parseBooleanFlag(value, fallback = false) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function truncateText(value, maxLength) {
+  const normalized = compactConversationText(value);
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function extractLatestUserQuery(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+
+    if (String(message?.role || "").toLowerCase() !== "user") {
+      continue;
+    }
+
+    const normalized = compactConversationText(message?.content);
+
+    if (normalized) {
+      return normalized.slice(0, 500);
+    }
+  }
+
+  return "";
+}
+
+function normalizeSearxngResult(item) {
+  const url = String(item?.url || "").trim();
+
+  if (!url) {
+    return null;
+  }
+
+  return {
+    title: compactConversationText(item?.title) || url,
+    url,
+    snippet: truncateText(
+      item?.content || item?.snippet || item?.description || item?.text,
+      webSearchSnippetMaxLength
+    ),
+    source: compactConversationText(item?.engine || item?.source || item?.parsed_url?.[1] || ""),
+    publishedAt: compactConversationText(item?.publishedDate || item?.published || "")
+  };
+}
+
+async function fetchSearxngResults(query) {
+  const searchUrl = new URL(searxngSearchPath, `${searxngBaseUrl}/`);
+  searchUrl.searchParams.set("q", query);
+  searchUrl.searchParams.set("format", "json");
+  searchUrl.searchParams.set("count", String(webSearchResultCount));
+
+  if (searxngLanguage) {
+    searchUrl.searchParams.set("language", searxngLanguage);
+  }
+
+  if (searxngSafeSearch) {
+    searchUrl.searchParams.set("safesearch", searxngSafeSearch);
+  }
+
+  const upstreamResponse = await requestJsonWithRetry(
+    searchUrl.toString(),
+    { timeout: webSearchTimeoutMs },
+    2
+  );
+
+  if (!upstreamResponse.ok) {
+    throw createUpstreamError(upstreamResponse);
+  }
+
+  const results = Array.isArray(upstreamResponse.data?.results) ? upstreamResponse.data.results : [];
+
+  return results
+    .map(normalizeSearxngResult)
+    .filter(Boolean)
+    .slice(0, webSearchResultCount);
+}
+
+function buildWebSearchContextMessage(query, results) {
+  const sourceText = results
+    .map((item, index) => {
+      const parts = [`[${index + 1}] ${item.title}`, `URL: ${item.url}`];
+
+      if (item.source) {
+        parts.push(`来源: ${item.source}`);
+      }
+
+      if (item.publishedAt) {
+        parts.push(`时间: ${item.publishedAt}`);
+      }
+
+      if (item.snippet) {
+        parts.push(`摘要: ${item.snippet}`);
+      }
+
+      return parts.join("\n");
+    })
+    .join("\n\n");
+
+  const content = [
+    "以下是系统通过 SearXNG 联网检索到的资料，请结合资料回答用户问题。",
+    `用户当前问题: ${query}`,
+    "",
+    sourceText,
+    "",
+    "回答要求:",
+    "1. 优先基于上述资料回答；",
+    "2. 资料不足或冲突时请明确说明；",
+    "3. 回答末尾附“参考来源”，列出使用到的 URL。"
+  ].join("\n");
+
+  return {
+    role: "system",
+    content: content.length > webSearchContextMaxLength
+      ? content.slice(0, webSearchContextMaxLength)
+      : content
+  };
+}
+
+function injectWebSearchContext(messages, query, results) {
+  if (!Array.isArray(messages) || !results.length) {
+    return messages;
+  }
+
+  const contextMessage = buildWebSearchContextMessage(query, results);
+  let insertIndex = messages.length;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (String(messages[index]?.role || "").toLowerCase() === "user") {
+      insertIndex = index;
+      break;
+    }
+  }
+
+  return [
+    ...messages.slice(0, insertIndex),
+    contextMessage,
+    ...messages.slice(insertIndex)
+  ];
+}
+
+async function enrichPayloadWithWebSearch(payload, requestBody) {
+  const webEnabled = parseBooleanFlag(requestBody?.webEnabled, webSearchDefaultEnabled);
+
+  if (!webSearchServerEnabled || !webEnabled) {
+    return payload;
+  }
+
+  const query = extractLatestUserQuery(payload?.messages);
+
+  if (!query) {
+    return payload;
+  }
+
+  try {
+    const searchResults = await fetchSearxngResults(query);
+
+    if (!searchResults.length) {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      messages: injectWebSearchContext(payload.messages, query, searchResults)
+    };
+  } catch (error) {
+    console.warn("SearXNG web search failed, falling back to model-only mode:", error.message || error);
+    return payload;
+  }
+}
+
 function sendSseEvent(response, eventName, data) {
   if (response.writableEnded) {
     return;
@@ -1600,7 +1829,8 @@ app.post("/api/chat", requireAuth, async (request, response, next) => {
 
   try {
     const config = getRuntimeConfig();
-    const requestBody = JSON.stringify(result.payload);
+    const payload = await enrichPayloadWithWebSearch(result.payload, request.body);
+    const requestBody = JSON.stringify(payload);
     const upstreamResponse = await requestJsonWithRetry(`${config.apiBaseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: createApiHeaders(config.apiKey, {
@@ -1621,7 +1851,7 @@ app.post("/api/chat", requireAuth, async (request, response, next) => {
   }
 });
 
-app.post("/api/chat/stream", requireAuth, (request, response, next) => {
+app.post("/api/chat/stream", requireAuth, async (request, response, next) => {
   const result = buildChatPayload(request.body, { stream: true });
 
   if (result.error) {
@@ -1629,7 +1859,8 @@ app.post("/api/chat/stream", requireAuth, (request, response, next) => {
   }
 
   const config = getRuntimeConfig();
-  const requestBody = JSON.stringify(result.payload);
+  const payload = await enrichPayloadWithWebSearch(result.payload, request.body);
+  const requestBody = JSON.stringify(payload);
   const target = new URL(`${config.apiBaseUrl}/v1/chat/completions`);
   const client = getHttpClient(target);
   let streamStarted = false;

@@ -272,3 +272,32 @@ docker inspect --format='{{json .State.Health}}' ai-chat-web
 - `MAX_STORED_CONVERSATIONS_PER_USER`：每个用户最大保留会话数（默认 120）。
 
 应用通过 `GET/PUT /api/conversations` 保存登录用户的会话，支持跨设备同步。
+
+
+## 13. SearXNG Integration
+
+The compose file now includes a built-in `searxng` service and wires AI Chat to it by default.
+
+Key variables in `.env.production`:
+- `SEARXNG_BASE_URL=http://searxng:8080`
+- `SEARXNG_SEARCH_PATH=/search`
+- `SEARXNG_RESULT_COUNT=5`
+- `SEARXNG_TIMEOUT_MS=12000`
+- `WEB_SEARCH_SERVER_ENABLED=true`
+- `WEB_SEARCH_DEFAULT_ENABLED=false`
+
+Bring up services:
+```bash
+docker compose --env-file .env.production up -d --build
+```
+
+Check SearXNG container:
+```bash
+docker compose ps searxng
+docker compose logs --tail=100 searxng
+```
+
+Verify local SearXNG API:
+```bash
+curl "http://127.0.0.1:8080/search?q=openai&format=json"
+```

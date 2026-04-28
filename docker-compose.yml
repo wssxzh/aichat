@@ -1,4 +1,17 @@
 services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: aichat-searxng
+    init: true
+    environment:
+      INSTANCE_NAME: ${SEARXNG_INSTANCE_NAME:-aichat-searxng}
+      BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://localhost:8080/}
+      FORCE_OWNERSHIP: "true"
+    volumes:
+      - searxng-config:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    restart: unless-stopped
+
   ai-chat-web:
     build:
       context: .
@@ -13,6 +26,12 @@ services:
       PORT: 3000
       API_BASE_URL: ${API_BASE_URL:-https://api.example.com}
       API_KEY: ${API_KEY:-demo-key-change-me}
+      WEB_SEARCH_SERVER_ENABLED: ${WEB_SEARCH_SERVER_ENABLED:-true}
+      WEB_SEARCH_DEFAULT_ENABLED: ${WEB_SEARCH_DEFAULT_ENABLED:-false}
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
+      SEARXNG_SEARCH_PATH: ${SEARXNG_SEARCH_PATH:-/search}
+      SEARXNG_RESULT_COUNT: ${SEARXNG_RESULT_COUNT:-5}
+      SEARXNG_TIMEOUT_MS: ${SEARXNG_TIMEOUT_MS:-12000}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-demo-admin-password-change-me}
       SESSION_TTL_MS: ${SESSION_TTL_MS:-28800000}
@@ -25,6 +44,8 @@ services:
       MAX_STORED_CONVERSATIONS_PER_USER: ${MAX_STORED_CONVERSATIONS_PER_USER:-120}
     volumes:
       - aichat-data:/data
+    depends_on:
+      - searxng
     healthcheck:
       test:
         - CMD-SHELL
@@ -37,3 +58,5 @@ services:
 
 volumes:
   aichat-data:
+  searxng-config:
+  searxng-cache:

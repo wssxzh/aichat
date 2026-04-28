@@ -6,6 +6,7 @@ const storageKeys = {
   dismissedAnnouncementIdByAccount: "wssxzh.dismissedAnnouncementIdByAccount",
   sidebarTab: "wssxzh.sidebarTab",
   sidebarCollapsed: "wssxzh.sidebarCollapsed",
+  webSearchEnabled: "wssxzh.webSearchEnabled",
   legacySelectedModelId: "wssxzh.selectedModelId",
   legacySystemPrompt: "wssxzh.systemPrompt",
   legacyTemperature: "wssxzh.temperature"
@@ -58,6 +59,7 @@ const elements = {
   chatMessages: document.getElementById("chatMessages"),
   settingsPanel: document.getElementById("settingsPanel"),
   toggleSettingsButton: document.getElementById("toggleSettingsButton"),
+  webSearchToggleButton: document.getElementById("webSearchToggleButton"),
   systemPromptInput: document.getElementById("systemPromptInput"),
   temperatureRange: document.getElementById("temperatureRange"),
   temperatureValue: document.getElementById("temperatureValue"),
@@ -140,6 +142,7 @@ const state = {
       ? readStorageItem(storageKeys.sidebarTab)
       : "conversations"),
   loading: false,
+  webSearchEnabled: readStorageItem(storageKeys.webSearchEnabled) === "1",
   abortController: null,
   typingController: null,
   sidebarUi: {
@@ -263,6 +266,28 @@ function applySidebarLayoutState() {
 
   document.body.classList.toggle("sidebar-mobile-locked", isMobile && state.sidebarUi.mobileOpen);
   syncSidebarToggleButtons();
+}
+
+function renderWebSearchToggle() {
+  if (!elements.webSearchToggleButton) {
+    return;
+  }
+
+  const enabled = Boolean(state.webSearchEnabled);
+  elements.webSearchToggleButton.classList.toggle("active", enabled);
+  elements.webSearchToggleButton.setAttribute("aria-pressed", String(enabled));
+  elements.webSearchToggleButton.title = enabled ? "Web Search: On" : "Web Search: Off";
+}
+
+function setWebSearchEnabled(enabled, options = {}) {
+  const { persist = true } = options;
+  state.webSearchEnabled = Boolean(enabled);
+
+  if (persist) {
+    writeStorageItem(storageKeys.webSearchEnabled, state.webSearchEnabled ? "1" : "0");
+  }
+
+  renderWebSearchToggle();
 }
 
 function setSidebarCollapsed(collapsed, options = {}) {
@@ -4248,7 +4273,8 @@ async function sendMessage(event) {
   const requestPayload = {
     model: activeConversation.modelId,
     temperature: clampTemperature(activeConversation.temperature),
-    messages: buildRequestMessages()
+    messages: buildRequestMessages(),
+    webEnabled: state.webSearchEnabled
   };
 
   const assistantMessage = createAssistantMessage(activeConversation.modelId);
@@ -4394,6 +4420,7 @@ async function bootstrap() {
   renderTestResult();
   autoResizeComposer();
   setConfigButtonsState();
+  setWebSearchEnabled(state.webSearchEnabled, { persist: false });
 
   elements.temperatureRange.addEventListener("input", () => {
     const activeConversation = getActiveConversation();
@@ -4427,6 +4454,11 @@ async function bootstrap() {
   elements.saveConfigButton.addEventListener("click", saveApiConfig);
   elements.testConfigButton.addEventListener("click", testApiConfig);
   elements.chatForm.addEventListener("submit", sendMessage);
+  if (elements.webSearchToggleButton) {
+    elements.webSearchToggleButton.addEventListener("click", () => {
+      setWebSearchEnabled(!state.webSearchEnabled);
+    });
+  }
   elements.userInput.addEventListener("keydown", handleComposerKeydown);
   elements.userInput.addEventListener("input", autoResizeComposer);
   elements.clearChatButton.addEventListener("click", clearConversation);

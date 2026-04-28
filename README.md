@@ -203,3 +203,20 @@ npm run docker:down
 - 新增环境变量：
   - `CONVERSATIONS_CONFIG_PATH`（默认：`.runtime-conversations.json`）
   - `MAX_STORED_CONVERSATIONS_PER_USER`（默认：`120`）
+
+
+## Web Search (SearXNG)
+
+This project supports optional web-grounded chat via SearXNG.
+
+Environment variables:
+- `WEB_SEARCH_SERVER_ENABLED`: Enable server-side web-search feature (default: `true`).
+- `WEB_SEARCH_DEFAULT_ENABLED`: Default UI toggle state for web-search (default: `false`).
+- `SEARXNG_BASE_URL`: SearXNG endpoint base URL.
+- `SEARXNG_SEARCH_PATH`: Search API path (default: `/search`).
+- `SEARXNG_RESULT_COUNT`: Max search results to inject into prompt.
+- `SEARXNG_TIMEOUT_MS`: Upstream timeout for SearXNG requests.
+
+Notes:
+- When web search is enabled in UI, frontend sends `webEnabled=true` with chat request.
+- If SearXNG is unavailable, backend automatically falls back to normal model-only chat.
