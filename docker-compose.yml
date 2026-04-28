@@ -22,7 +22,7 @@ services:
       ANNOUNCEMENTS_CONFIG_PATH: ${ANNOUNCEMENTS_CONFIG_PATH:-/data/runtime-announcements.json}
       MAX_STORED_ANNOUNCEMENTS: ${MAX_STORED_ANNOUNCEMENTS:-80}
     volumes:
-      - ./data:/data
+      - aichat-data:/data
     healthcheck:
       test:
         - CMD-SHELL
@@ -32,3 +32,6 @@ services:
       retries: 3
       start_period: 20s
     restart: unless-stopped
+
+volumes:
+  aichat-data:
