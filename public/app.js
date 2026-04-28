@@ -2170,7 +2170,10 @@ function renderConversationList(options = {}) {
     if (conversation.pinned) {
       const pinnedBadge = document.createElement("span");
       pinnedBadge.className = "recent-pin-badge";
-      pinnedBadge.textContent = "置顶";
+      pinnedBadge.setAttribute("aria-label", "已置顶");
+      pinnedBadge.title = "已置顶";
+      pinnedBadge.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6v3l2 2v1H7V9l2-2V4Zm3 6v10" /></svg>';
       titleHead.appendChild(pinnedBadge);
     }
 

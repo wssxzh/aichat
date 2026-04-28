@@ -527,17 +527,17 @@ h3 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 999px;
-  border: 1px solid rgba(114, 122, 198, 0.24);
-  background: rgba(113, 121, 199, 0.12);
-  color: #6c74c7;
-  font-size: 0.62rem;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  color: #9ca3bb;
   flex-shrink: 0;
+}
+
+.recent-pin-badge svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2;
 }
 
 .recent-item-body {
@@ -586,8 +586,7 @@ h3 {
 }
 
 .recent-item.active .recent-pin-badge {
-  border-color: rgba(114, 122, 198, 0.36);
-  background: rgba(113, 121, 199, 0.18);
+  color: #8f96ad;
 }
 
 .recent-more-wrap {
@@ -605,8 +604,8 @@ h3 {
   height: 26px;
   border-radius: 999px;
   color: #9fa6c0;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   cursor: pointer;
   transition: opacity 0.18s ease, background 0.18s ease, color 0.18s ease;
 }
@@ -615,12 +614,6 @@ h3 {
   width: 16px;
   height: 16px;
   stroke-width: 2.8;
-}
-
-.recent-row:hover .recent-more-trigger,
-.recent-row.menu-open .recent-more-trigger {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .recent-more-trigger:hover {
@@ -846,7 +839,7 @@ h3 {
 }
 
 #chatWorkspace > .workspace-header {
-  border-bottom: 1px solid rgba(114, 124, 194, 0.18);
+  border-bottom: 0;
 }
 
 .workspace-title-block {
@@ -2259,13 +2252,13 @@ input[type="range"] {
   }
 
   .model-switcher {
-    flex: 1;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: auto;
     gap: 0;
   }
 
   .model-select-shell {
-    width: 100%;
+    width: min(244px, calc(100vw - 86px));
     min-height: 40px;
     border-radius: 12px;
   }
@@ -2332,7 +2325,7 @@ input[type="range"] {
   }
 
   .model-select-shell {
-    width: 100%;
+    width: min(232px, calc(100vw - 76px));
     border-radius: 12px;
   }
 
