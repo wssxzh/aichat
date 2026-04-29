@@ -6,6 +6,7 @@ services:
     environment:
       INSTANCE_NAME: ${SEARXNG_INSTANCE_NAME:-aichat-searxng}
       BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://localhost:8080/}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-this-searxng-secret-key}
       FORCE_OWNERSHIP: "true"
     volumes:
       - ./searxng:/etc/searxng

@@ -274,61 +274,97 @@ docker inspect --format='{{json .State.Health}}' ai-chat-web
 应用通过 `GET/PUT /api/conversations` 保存登录用户的会话，支持跨设备同步。
 
 
-## 13. SearXNG Integration
+## 13. SearXNG 联网搜索集成
 
-The compose file includes a built-in `searxng` service and wires AI Chat to it by default.
-It now uses repository-managed config files:
+当前 `docker-compose.yml` 已内置 `searxng` 服务，并默认与 `ai-chat-web` 打通。
+
+### 13.1 配置文件挂载关系
 
 - `./searxng/settings.yml -> /etc/searxng/settings.yml`
 - `./searxng/limiter.toml -> /etc/searxng/limiter.toml`
 
-Key variables in `.env.production`:
+### 13.2 `.env.production` 必填与推荐项
+
 - `SEARXNG_BASE_URL=http://searxng:8080`
-- `SEARXNG_FALLBACK_BASE_URL=` (optional, useful for non-compose fallback)
+- `SEARXNG_SECRET=<请替换为随机强密钥>`（必填，不能使用默认值）
+- `WEB_SEARCH_SERVER_ENABLED=true`
+- `WEB_SEARCH_DEFAULT_ENABLED=false`
+
+推荐项：
+
+- `SEARXNG_FALLBACK_BASE_URL=`（可选回退地址）
 - `SEARXNG_SEARCH_PATH=/search`
 - `SEARXNG_RESULT_COUNT=5`
 - `SEARXNG_TIMEOUT_MS=12000`
 - `SEARXNG_USER_AGENT=Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)`
-- `WEB_SEARCH_SERVER_ENABLED=true`
-- `WEB_SEARCH_DEFAULT_ENABLED=false`
+- `SEARXNG_LANGUAGE=`
+- `SEARXNG_SAFESEARCH=`
 
-Bring up services:
+### 13.3 启动与重建
+
+首次或常规启动：
+
 ```bash
 docker compose --env-file .env.production up -d --build
 ```
 
-Recreate if you already had old volumes/config:
+配置变更后强制重建：
+
 ```bash
 docker compose --env-file .env.production down --remove-orphans
 docker compose --env-file .env.production up -d --build --force-recreate
 ```
 
-Check SearXNG container:
+### 13.4 状态与日志检查
+
 ```bash
 docker compose ps searxng
-docker compose logs --tail=100 searxng
+docker compose logs --tail=120 searxng
+docker compose logs --tail=200 ai-chat-web
 ```
 
-Verify local SearXNG API:
-```bash
-curl "http://127.0.0.1:8080/search?q=openai&format=json"
-```
+### 13.5 联网能力验证（强烈建议）
 
-Verify app-side web search pipeline (requires login cookie):
+1. 验证应用到 SearXNG 的链路（需登录态 Cookie）：
+
 ```bash
 curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
 ```
 
-Expected: `"connected": true`.
+返回 `connected: true` 说明应用链路正常。
 
-If SearXNG logs include `ahmia/torch/wikidata` load errors:
-- They are now disabled by default in `searxng/settings.yml`.
-- Recreate the `searxng` container to apply updated config.
+2. Docker 场景下，优先使用容器内地址验证 SearXNG：
 
-If chat still answers without web grounding:
-- Confirm UI `Web` toggle is ON.
-- Confirm `/api/web-search/status` returns `connected: true`.
-- Check `ai-chat-web` logs for `SearXNG web search failed...` details:
 ```bash
-docker compose logs --tail=200 ai-chat-web
+docker compose exec ai-chat-web \
+node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text()).then(t=>console.log(t.slice(0,300)))"
 ```
+
+### 13.6 常见故障与处理
+
+1. `searxng` 容器反复重启，日志包含：
+`server.secret_key is not changed ... ultrasecretkey`
+
+处理：
+
+- 在 `.env.production` 设置 `SEARXNG_SECRET` 为随机强密钥
+- 执行强制重建命令（见 13.3）
+
+2. 主机上 `curl http://127.0.0.1:8080/search?...` 返回的是其他系统页面
+
+原因：
+
+- 主机 8080 端口被其他服务占用，不一定是 `searxng`
+
+处理：
+
+- 不要仅凭主机 8080 判断
+- 使用 13.5 的容器内验证命令确认真实链路
+
+3. 页面可聊天但看起来“没有联网”
+
+检查顺序：
+
+- 确认前端 `Web` 开关为开启
+- 确认 `/api/web-search/status` 返回 `connected: true`
+- 查看 `ai-chat-web` 日志中 `SearXNG web search failed` 细节

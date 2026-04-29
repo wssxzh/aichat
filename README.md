@@ -205,41 +205,58 @@ npm run docker:down
   - `MAX_STORED_CONVERSATIONS_PER_USER`（默认：`120`）
 
 
-## Web Search (SearXNG)
+## 联网搜索（SearXNG）
 
-This project supports optional web-grounded chat via SearXNG.
+项目已支持基于 SearXNG 的可选联网对话能力。开启后，后端会先检索网页结果，再把资料注入到对话上下文中发送给模型。
 
-Environment variables:
-- `WEB_SEARCH_SERVER_ENABLED`: Enable server-side web-search feature (default: `true`).
-- `WEB_SEARCH_DEFAULT_ENABLED`: Default UI toggle state for web-search (default: `false`).
-- `SEARXNG_BASE_URL`: SearXNG endpoint base URL.
-- `SEARXNG_SEARCH_PATH`: Search API path (default: `/search`).
-- `SEARXNG_RESULT_COUNT`: Max search results to inject into prompt.
-- `SEARXNG_TIMEOUT_MS`: Upstream timeout for SearXNG requests.
+### 功能开关说明
 
-Notes:
-- When web search is enabled in UI, frontend sends `webEnabled=true` with chat request.
-- If SearXNG is unavailable, backend automatically falls back to normal model-only chat.
-- The frontend default toggle now follows server config (`WEB_SEARCH_DEFAULT_ENABLED`) when browser has no saved preference.
+- `WEB_SEARCH_SERVER_ENABLED`：后端总开关，默认 `true`。设为 `false` 时前端不显示联网按钮。
+- `WEB_SEARCH_DEFAULT_ENABLED`：前端首次访问的默认状态，默认 `false`。
+- 前端发送消息时会携带 `webEnabled`，后端据此决定本次请求是否联网检索。
 
-### SearXNG Runtime Files
+说明：若浏览器本地已有用户手动切换记录，会优先使用本地记录；没有记录时，采用 `WEB_SEARCH_DEFAULT_ENABLED`。
 
-This repo now ships a built-in SearXNG config directory:
+### SearXNG 关键配置项
+
+- `SEARXNG_BASE_URL`：SearXNG 服务地址。Docker Compose 场景建议 `http://searxng:8080`。
+- `SEARXNG_FALLBACK_BASE_URL`：可选回退地址。主地址失败时会尝试该地址。
+- `SEARXNG_SEARCH_PATH`：搜索路径，默认 `/search`。
+- `SEARXNG_RESULT_COUNT`：每次注入上下文的最大结果条数，默认 `5`。
+- `SEARXNG_TIMEOUT_MS`：SearXNG 请求超时（毫秒），默认 `12000`。
+- `SEARXNG_USER_AGENT`：后端请求 SearXNG 的 UA 标识。
+- `SEARXNG_LANGUAGE`：可选语言参数（留空表示由 SearXNG 默认策略决定）。
+- `SEARXNG_SAFESEARCH`：可选安全搜索等级参数。
+- `SEARXNG_SECRET`：SearXNG 密钥，必须修改，不能使用默认值。
+
+### 仓库内置配置文件
+
+仓库内已提供 SearXNG 配置目录（`./searxng`）：
 
 - `searxng/settings.yml`
 - `searxng/limiter.toml`
 
-Important defaults in `settings.yml`:
-- Enable JSON output (`search.formats` includes `json`), required by backend API integration.
-- Disable noisy failing engines (`ahmia`, `torch`, `wikidata`).
-- Disable limiter by default for simple internal deployment (`server.limiter: false`).
+其中已包含以下默认策略：
 
-### Quick Connectivity Check
+- 开启 JSON 输出（`search.formats` 包含 `json`），用于后端 API 调用。
+- 默认移除常见报错引擎（`ahmia`、`torch`、`wikidata`）。
+- 默认关闭 limiter（`server.limiter: false`）。
 
-After login, you can check backend-to-SearXNG connectivity:
+### 快速自检（推荐）
+
+1. 先确认应用侧连通状态（需登录态 Cookie）：
 
 ```bash
-curl -b "<your-cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
+curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
 ```
 
-If connected, response contains `"connected": true` and sample search results.
+返回 `connected: true` 表示应用到 SearXNG 链路正常。
+
+2. Docker 场景建议用容器内地址验证，避免主机端口冲突误判：
+
+```bash
+docker compose exec ai-chat-web \
+node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text()).then(t=>console.log(t.slice(0,300)))"
+```
+
+提示：如果你在主机上访问 `http://127.0.0.1:8080` 得到的是其它系统页面（而非 SearXNG JSON），通常是端口被其他服务占用，不代表 Compose 内部 `searxng` 不可用。

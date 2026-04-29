@@ -15,4 +15,5 @@ search:
     - json
 
 server:
+  secret_key: "change-this-searxng-secret-key"
   limiter: false

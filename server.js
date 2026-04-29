@@ -1325,6 +1325,18 @@ function buildSearxngSearchUrl(baseUrl, query) {
 }
 
 function extractSearxngResultItems(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const preview = typeof payload === "string"
+      ? truncateText(payload.replace(/\s+/g, " "), 180)
+      : "";
+    const detail = preview
+      ? `SearXNG response is not JSON object: ${preview}`
+      : "SearXNG response is not JSON object.";
+    const error = new Error(detail);
+    error.status = 502;
+    throw error;
+  }
+
   const results = Array.isArray(payload?.results) ? payload.results : [];
 
   if (results.length) {
