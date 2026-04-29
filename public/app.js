@@ -20,6 +20,12 @@ const starterPrompts = [
 ];
 
 const defaultTemperature = 0.7;
+const defaultMarkdownFormatInstruction = [
+  "请始终使用 Markdown 输出回复内容。",
+  "代码必须使用带语言标识的三反引号代码块，例如 ```js。",
+  "表格必须使用标准 Markdown 表格语法。",
+  "涉及步骤时优先使用有序或无序列表，不要输出纯文本堆叠。"
+].join("\n");
 const typingIntervalMs = 18;
 const recentListInitialBatch = 24;
 const recentListBatchSize = 20;
@@ -398,6 +404,80 @@ function truncateText(text, maxLength = 28) {
 
 function getMessageTextContent(message) {
   return typeof message?.content === "string" ? message.content : "";
+}
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderMarkdownToSafeHtml(markdownText) {
+  const source = String(markdownText || "");
+
+  if (!source.trim()) {
+    return "";
+  }
+
+  const markedParser = window.marked;
+
+  if (!markedParser || typeof markedParser.parse !== "function") {
+    return escapeHtml(source).replace(/\n/g, "<br>");
+  }
+
+  try {
+    const renderedHtml = markedParser.parse(source, {
+      gfm: true,
+      breaks: true,
+      headerIds: false,
+      mangle: false
+    });
+    const purifier = window.DOMPurify;
+
+    if (purifier && typeof purifier.sanitize === "function") {
+      return purifier.sanitize(renderedHtml, {
+        USE_PROFILES: { html: true }
+      });
+    }
+
+    return escapeHtml(source).replace(/\n/g, "<br>");
+  } catch (error) {
+    return escapeHtml(source).replace(/\n/g, "<br>");
+  }
+}
+
+function decorateMessageLinks(container) {
+  if (!(container instanceof HTMLElement)) {
+    return;
+  }
+
+  const links = container.querySelectorAll("a");
+
+  for (const link of links) {
+    link.setAttribute("target", "_blank");
+    link.setAttribute("rel", "noopener noreferrer nofollow");
+  }
+}
+
+function renderMessageContent(container, message) {
+  if (!(container instanceof HTMLElement)) {
+    return;
+  }
+
+  const rawText = getMessageTextContent(message);
+
+  if (message?.role === "assistant") {
+    container.classList.add("message-markdown");
+    container.innerHTML = renderMarkdownToSafeHtml(rawText);
+    decorateMessageLinks(container);
+    return;
+  }
+
+  container.classList.remove("message-markdown");
+  container.textContent = rawText;
 }
 
 function deriveConversationTitle(messages) {
@@ -2427,7 +2507,7 @@ function createMessageElement(message) {
 
     const text = document.createElement("div");
     text.className = "message-text";
-    text.textContent = getMessageTextContent(message);
+    renderMessageContent(text, message);
 
     const footer = document.createElement("div");
     footer.className = "message-footer";
@@ -2473,7 +2553,7 @@ function createMessageElement(message) {
   card.className = "message-card user-card";
   const text = document.createElement("div");
   text.className = "message-text";
-  text.textContent = getMessageTextContent(message);
+  renderMessageContent(text, message);
   card.appendChild(text);
 
   const footer = document.createElement("div");
@@ -2536,7 +2616,7 @@ function syncMessageElement(message) {
   }
 
   if (text) {
-    text.textContent = getMessageTextContent(message);
+    renderMessageContent(text, message);
   }
 
   if (time) {
@@ -2618,10 +2698,16 @@ function buildRequestMessages() {
     .map(({ role, content }) => ({ role, content }));
 
   if (!systemPrompt) {
-    return conversationMessages;
+    return [{ role: "system", content: defaultMarkdownFormatInstruction }, ...conversationMessages];
   }
 
-  return [{ role: "system", content: systemPrompt }, ...conversationMessages];
+  return [
+    {
+      role: "system",
+      content: `${defaultMarkdownFormatInstruction}\n\n补充系统要求：\n${systemPrompt}`
+    },
+    ...conversationMessages
+  ];
 }
 
 function extractTextContent(content) {
@@ -3010,7 +3096,7 @@ function createMessageElement(message) {
 
     const text = document.createElement("div");
     text.className = "message-text";
-    text.textContent = getMessageTextContent(message);
+    renderMessageContent(text, message);
 
     const footer = document.createElement("div");
     footer.className = "message-footer";
@@ -3056,7 +3142,7 @@ function createMessageElement(message) {
   card.className = "message-card user-card";
   const text = document.createElement("div");
   text.className = "message-text";
-  text.textContent = getMessageTextContent(message);
+  renderMessageContent(text, message);
   card.appendChild(text);
 
   const footer = document.createElement("div");
@@ -3134,7 +3220,7 @@ function syncMessageElement(message) {
   }
 
   if (text) {
-    text.textContent = getMessageTextContent(message);
+    renderMessageContent(text, message);
   }
 
   if (time) {
