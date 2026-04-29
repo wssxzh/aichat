@@ -299,6 +299,13 @@ docker inspect --format='{{json .State.Health}}' ai-chat-web
 - `SEARXNG_USER_AGENT=Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)`
 - `SEARXNG_LANGUAGE=`
 - `SEARXNG_SAFESEARCH=`
+- `GITHUB_API_BASE_URL=https://api.github.com`
+- `WEB_SEARCH_DIRECT_URL_ENABLED=true`
+- `WEB_SEARCH_MAX_QUERIES=3`
+- `WEB_SEARCH_FETCH_PAGE_COUNT=3`
+- `WEB_SEARCH_PAGE_TIMEOUT_MS=8000`
+- `WEB_SEARCH_MIN_SCORE=0.12`
+- `WEB_SEARCH_FAILURE_NOTICE_ENABLED=true`
 
 ### 13.3 启动与重建
 
@@ -340,6 +347,22 @@ docker compose exec ai-chat-web \
 node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text()).then(t=>console.log(t.slice(0,300)))"
 ```
 
+3. 验证“GitHub 链接直连解析”（示例）：
+
+```bash
+curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=https://github.com/wssxzh/aichat"
+```
+
+若返回 `connected: true` 且 `sample` 中出现 `github-api` 来源，说明直连解析生效。
+
+4. 验证“多查询 + 正文抓取”是否生效（示例）：
+
+```bash
+curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=帮我总结这个项目的技术栈和部署方式"
+```
+
+`sample` 中若出现较长 `snippet` 且来源带 `+page`，表示正文抓取与重排链路生效。
+
 ### 13.6 常见故障与处理
 
 1. `searxng` 容器反复重启，日志包含：
@@ -368,3 +391,19 @@ node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text
 - 确认前端 `Web` 开关为开启
 - 确认 `/api/web-search/status` 返回 `connected: true`
 - 查看 `ai-chat-web` 日志中 `SearXNG web search failed` 细节
+
+4. 粘贴 GitHub 仓库链接仍提示“资料不足”
+
+检查：
+
+- `WEB_SEARCH_DIRECT_URL_ENABLED` 是否为 `true`
+- 服务器是否可访问 `https://api.github.com`
+- 再用 13.5 的第 3 条命令检查 `sample` 是否包含 `github-api`
+
+5. 联网回答质量偏弱（只有短摘要）
+
+检查与调优：
+
+- 增大 `WEB_SEARCH_FETCH_PAGE_COUNT`（建议 3 到 5）
+- 适当提高 `WEB_SEARCH_PAGE_TIMEOUT_MS`（网络慢时建议 10000 到 15000）
+- 降低 `WEB_SEARCH_MIN_SCORE`（命中过少时可降到 `0.08`）

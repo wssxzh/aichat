@@ -228,6 +228,13 @@ npm run docker:down
 - `SEARXNG_LANGUAGE`：可选语言参数（留空表示由 SearXNG 默认策略决定）。
 - `SEARXNG_SAFESEARCH`：可选安全搜索等级参数。
 - `SEARXNG_SECRET`：SearXNG 密钥，必须修改，不能使用默认值。
+- `GITHUB_API_BASE_URL`：GitHub API 地址，默认 `https://api.github.com`。
+- `WEB_SEARCH_DIRECT_URL_ENABLED`：是否启用“链接直连解析”，默认 `true`。
+- `WEB_SEARCH_MAX_QUERIES`：单次请求最多并行检索的查询变体数，默认 `3`。
+- `WEB_SEARCH_FETCH_PAGE_COUNT`：对检索结果做正文抓取的最大页面数，默认 `3`。
+- `WEB_SEARCH_PAGE_TIMEOUT_MS`：单页面正文抓取超时（毫秒），默认 `8000`。
+- `WEB_SEARCH_MIN_SCORE`：结果重排最低分阈值，默认 `0.12`。
+- `WEB_SEARCH_FAILURE_NOTICE_ENABLED`：联网失败时是否显式注入“未成功联网”提示，默认 `true`。
 
 ### 仓库内置配置文件
 
@@ -241,6 +248,21 @@ npm run docker:down
 - 开启 JSON 输出（`search.formats` 包含 `json`），用于后端 API 调用。
 - 默认移除常见报错引擎（`ahmia`、`torch`、`wikidata`）。
 - 默认关闭 limiter（`server.limiter: false`）。
+
+### 直连解析能力（新增）
+
+当用户问题中包含 GitHub 仓库链接（例如 `https://github.com/wssxzh/aichat`）时，后端会优先直连 GitHub API 拉取仓库元信息与 README 摘要，再与 SearXNG 检索结果合并后交给模型。  
+这样可以显著减少“搜索引擎未收录导致资料不足”的情况。
+
+### 联网编排流程（增强）
+
+当前联网流程已升级为：
+
+1. 查询改写：把用户问题扩展为多个检索变体并行搜索。  
+2. 结果合并：融合 GitHub 直连解析结果与 SearXNG 检索结果。  
+3. 正文抓取：对 Top 结果抓取网页正文摘要，减少仅靠标题/短摘要误判。  
+4. 结果重排：按相关性与信息量打分筛选。  
+5. 失败显式化：检索失败时明确告诉模型“本次未成功联网”，避免假装有来源。
 
 ### 快速自检（推荐）
 
