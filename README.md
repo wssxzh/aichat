@@ -1,154 +1,270 @@
 # AI Chat Web
 
-一个基于 `Node.js + Express + 原生前端` 的 AI 对话应用，支持用户登录注册、管理员配置模型 API、公告管理、多会话聊天和 SSE 流式输出。
+一个基于 `Node.js + Express + 原生前端` 的 AI 对话 Web 项目。
 
-本项目既可本地开发，也可通过 Docker Compose 快速部署到生产环境。
+项目内置了完整的用户体系、管理员后台、模型接口配置、会话持久化、公告管理，以及基于 SearXNG 的可选联网搜索能力。当前版本已经完成服务端与前端的结构化重构，入口保持不变，但代码层次更清晰，便于继续维护和扩展。
 
-## 1. 功能概览
+## 项目特性
 
-- 用户认证：注册、登录、注销、会话鉴权
-- 权限模型：普通用户 + 管理员
-- 管理后台能力：
-  - 配置 `API_BASE_URL` / `API_KEY`
-  - 测试模型接口连通性
-  - 管理用户（创建、禁用、角色变更、删除）
-  - 发布与删除公告
-- 对话能力：
-  - 普通响应 `/api/chat`
-  - 流式响应 `/api/chat/stream`
-- 运维能力：
-  - 健康检查 `/healthz`
-  - Docker 健康探针
-  - 持久化运行数据
+- 支持用户注册、登录、登出和基于 Cookie 的会话鉴权
+- 支持普通用户与管理员两种角色
+- 支持多会话聊天与登录用户跨设备会话持久化
+- 支持普通请求和 SSE 流式对话输出
+- 支持管理员在页面内配置模型接口地址与密钥
+- 支持管理员管理用户与发布公告
+- 支持基于 SearXNG 的联网搜索增强
+- 支持 Docker Compose 一键部署
 
-## 2. 技术栈与目录结构
+## 技术栈
 
-- 后端：Node.js 20 + Express
-- 前端：原生 HTML/CSS/JS
+- 服务端：`Node.js 20`、`Express`
+- 前端：原生 `HTML / CSS / JavaScript`
 - 配置管理：`dotenv`
-- 容器化：Docker + Docker Compose
+- Markdown 渲染：`marked`
+- 输出净化：`DOMPurify`
+- 容器化：`Docker`、`Docker Compose`
 
-目录结构：
+## 当前架构
+
+### 服务端分层
+
+- `server.js`
+  根启动入口，只负责启动应用
+- `src/server/index.js`
+  依赖装配与服务启动
+- `src/server/app.js`
+  Express 应用创建、静态资源挂载、兜底路由、全局错误处理
+- `src/server/config/`
+  环境变量与运行参数
+- `src/server/routes/`
+  API 路由注册
+- `src/server/services/`
+  认证、聊天、联网搜索、HTTP 请求等业务能力
+- `src/server/stores/`
+  运行时配置、用户、公告、会话等持久化读写
+
+### 前端分层
+
+- `public/index.html`
+  页面入口
+- `public/styles.css`
+  全局样式
+- `public/scripts/app-shell.js`
+  页面骨架、状态、基础工具与 UI 外壳逻辑
+- `public/scripts/chat-render.js`
+  聊天区渲染与消息交互
+- `public/scripts/app-actions.js`
+  页面动作、请求调用、启动流程
+
+## 目录结构
 
 ```text
 .
-├─ public/                    # 前端静态资源
-├─ server.js                  # 应用主入口
-├─ Dockerfile                 # 镜像构建文件
-├─ docker-compose.yml         # 容器编排配置
-├─ .env.example               # 本地开发环境变量示例
-├─ .env.production.example    # 生产环境变量示例
-├─ DEPLOYMENT.md              # 生产部署手册
-└─ README.md
+├─ public/
+│  ├─ index.html
+│  ├─ styles.css
+│  ├─ scripts/
+│  │  ├─ app-shell.js
+│  │  ├─ chat-render.js
+│  │  └─ app-actions.js
+│  └─ vendor/
+├─ searxng/
+├─ src/
+│  └─ server/
+│     ├─ app.js
+│     ├─ index.js
+│     ├─ config/
+│     ├─ routes/
+│     ├─ services/
+│     └─ stores/
+├─ server.js
+├─ Dockerfile
+├─ docker-compose.yml
+├─ .env.example
+├─ .env.production.example
+├─ README.md
+└─ DEPLOYMENT.md
 ```
 
-## 3. 运行环境要求
+## 运行要求
 
-- Node.js `>= 20`
-- npm `>= 10`
-- Docker `>= 24`（推荐）
-- Docker Compose v2（`docker compose`）
+- `Node.js >= 20`
+- `npm >= 10`
+- 可选：`Docker >= 24`
+- 可选：`Docker Compose v2`
 
-## 4. 本地开发快速开始
+## 本地开发
 
-1. 安装依赖
+### 1. 安装依赖
 
 ```bash
 npm install
 ```
 
-2. 复制环境变量模板
+### 2. 准备环境变量
 
-Windows PowerShell:
+PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Linux/macOS:
+Linux / macOS:
 
 ```bash
 cp .env.example .env
 ```
 
-3. 按需修改 `.env`（至少改 `API_BASE_URL` 和 `API_KEY`）
+### 3. 修改最基本配置
 
-4. 启动服务
+至少确认以下变量：
+
+- `API_BASE_URL`
+- `API_KEY`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+
+本地开发通常建议保持：
+
+- `SESSION_COOKIE_SECURE=false`
+- `WEB_SEARCH_DEFAULT_ENABLED=false`
+
+如果本地没有部署 SearXNG，也可以继续开发聊天主流程。联网搜索默认关闭，不会影响基本对话功能。
+
+### 4. 启动项目
 
 ```bash
 npm run dev
 ```
 
-5. 访问应用
+启动后访问：
 
 - [http://localhost:3000](http://localhost:3000)
 
-6. 健康检查
+### 5. 语法检查
+
+```bash
+npm run check
+```
+
+### 6. 健康检查
 
 ```bash
 curl http://127.0.0.1:3000/healthz
 ```
 
-## 5. 环境变量说明
+正常返回示例：
 
-下表覆盖当前项目常用变量（完整示例见 [`.env.example`](./.env.example) 和 [`.env.production.example`](./.env.production.example)）。
-
-| 变量名 | 默认值 | 是否必改 | 说明 |
-| --- | --- | --- | --- |
-| `API_BASE_URL` | `https://api.example.com` | 是 | 上游模型接口地址 |
-| `API_KEY` | `demo-key-change-me` | 是 | 上游模型接口密钥 |
-| `ADMIN_USERNAME` | `admin` | 建议 | 初始管理员用户名 |
-| `ADMIN_PASSWORD` | `demo-admin-password-change-me` | 是 | 初始管理员密码，生产必须改 |
-| `SESSION_TTL_MS` | `28800000` | 否 | 会话有效期（毫秒），默认 8 小时 |
-| `SESSION_COOKIE_SECURE` | `false`/生产建议 `true` | 是（生产） | 是否仅通过 HTTPS 发送会话 Cookie |
-| `HOST` | `0.0.0.0` | 否 | 应用监听地址 |
-| `PORT` | `3000` | 否 | 应用监听端口 |
-| `RUNTIME_CONFIG_PATH` | `.runtime-config.json` 或 `/data/runtime-config.json` | 否 | 运行时模型配置文件 |
-| `USERS_CONFIG_PATH` | `.runtime-users.json` 或 `/data/runtime-users.json` | 否 | 用户存储文件 |
-| `ANNOUNCEMENTS_CONFIG_PATH` | `.runtime-announcements.json` 或 `/data/runtime-announcements.json` | 否 | 公告存储文件 |
-| `MAX_STORED_ANNOUNCEMENTS` | `80` | 否 | 公告最大保留数量 |
-
-## 6. Docker Compose 部署（推荐）
-
-### 6.1 首次部署
-
-```bash
-cp .env.production.example .env.production
-# 编辑 .env.production，至少修改 API_BASE_URL / API_KEY / ADMIN_PASSWORD
-
-docker compose --env-file .env.production up -d --build
+```json
+{
+  "status": "ok"
+}
 ```
 
-### 6.2 查看状态与日志
+## 运行机制说明
 
-```bash
-docker compose ps
-docker compose logs -f ai-chat-web
-```
+### 用户与管理员
 
-### 6.3 验证服务
+- 项目启动时会根据 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 自动保证默认管理员存在
+- 普通用户可以注册并登录
+- 管理员可以在页面内完成：
+  - 模型接口配置
+  - 模型连通性测试
+  - 用户管理
+  - 公告发布与删除
 
-```bash
-curl -fsS http://127.0.0.1:3000/healthz
-```
+### 会话持久化
 
-返回 `status: ok` 即为正常。
+- 未登录用户的会话保存在浏览器本地
+- 已登录用户的会话通过服务端接口持久化
+- 默认持久化文件：
+  - `.runtime-config.json`
+  - `.runtime-users.json`
+  - `.runtime-announcements.json`
+  - `.runtime-conversations.json`
 
-## 7. 数据持久化与权限策略
+### 联网搜索
 
-当前默认采用 Docker 命名卷：
+项目支持可选联网搜索增强。
 
-- `aichat-data:/data`
+工作方式：
 
-这样做的目的：
+1. 前端在发送消息时附带 `webEnabled`
+2. 服务端根据配置决定是否启用联网
+3. 服务端优先尝试 GitHub 链接直连解析
+4. 再通过 SearXNG 拉取搜索结果
+5. 对部分页面抓取正文摘要并重排结果
+6. 将整理后的上下文注入模型请求
 
-- 避免宿主机目录绑定带来的 UID/GID 权限冲突
-- 避免 `EACCES: permission denied, open '/data/runtime-users.json'`
-- 简化迁移和恢复
+如果联网失败且开启了失败提示，服务端会明确告诉模型“本次未成功联网”，避免伪造来源。
 
-说明：如你必须使用宿主机路径挂载，请先阅读 [DEPLOYMENT.md](./DEPLOYMENT.md) 里的权限章节。
+## 环境变量
 
-## 8. 常用命令
+完整示例请参考：
+
+- [`.env.example`](./.env.example)
+- [`.env.production.example`](./.env.production.example)
+
+### 核心变量
+
+| 变量 | 说明 | 本地默认 |
+| --- | --- | --- |
+| `API_BASE_URL` | 上游模型接口地址 | `https://api.example.com` |
+| `API_KEY` | 上游模型接口密钥 | `demo-key-change-me` |
+| `ADMIN_USERNAME` | 默认管理员用户名 | `admin` |
+| `ADMIN_PASSWORD` | 默认管理员密码 | `demo-admin-password-change-me` |
+| `HOST` | 服务监听地址 | `0.0.0.0` |
+| `PORT` | 服务监听端口 | `3000` |
+
+### 会话与安全
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `SESSION_TTL_MS` | 登录会话有效期，单位毫秒 | `28800000` |
+| `SESSION_COOKIE_SECURE` | 是否只在 HTTPS 下发送会话 Cookie | 本地 `false`，生产建议 `true` |
+
+### 数据持久化
+
+| 变量 | 说明 | 本地默认 |
+| --- | --- | --- |
+| `RUNTIME_CONFIG_PATH` | 运行时模型配置文件 | `.runtime-config.json` |
+| `USERS_CONFIG_PATH` | 用户数据文件 | `.runtime-users.json` |
+| `ANNOUNCEMENTS_CONFIG_PATH` | 公告数据文件 | `.runtime-announcements.json` |
+| `CONVERSATIONS_CONFIG_PATH` | 会话数据文件 | `.runtime-conversations.json` |
+| `MAX_STORED_ANNOUNCEMENTS` | 公告最大保留数量 | `80` |
+| `MAX_STORED_CONVERSATIONS_PER_USER` | 每个用户最大会话数 | `120` |
+
+### 联网搜索相关
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `WEB_SEARCH_SERVER_ENABLED` | 服务端联网功能总开关 | `true` |
+| `WEB_SEARCH_DEFAULT_ENABLED` | 前端默认是否开启联网 | `false` |
+| `WEB_SEARCH_DIRECT_URL_ENABLED` | 是否启用 GitHub 链接直连解析 | `true` |
+| `WEB_SEARCH_MAX_QUERIES` | 单次最大搜索变体数 | `3` |
+| `WEB_SEARCH_FETCH_PAGE_COUNT` | 抓取正文的最大页面数 | `3` |
+| `WEB_SEARCH_PAGE_TIMEOUT_MS` | 页面抓取超时 | `8000` |
+| `WEB_SEARCH_MIN_SCORE` | 搜索结果最低筛选分数 | `0.12` |
+| `WEB_SEARCH_FAILURE_NOTICE_ENABLED` | 联网失败时是否注入明确提示 | `true` |
+
+### SearXNG 相关
+
+| 变量 | 说明 | 本地默认 |
+| --- | --- | --- |
+| `SEARXNG_BASE_URL` | SearXNG 服务地址 | `http://127.0.0.1:8080` |
+| `SEARXNG_FALLBACK_BASE_URL` | 备用 SearXNG 地址 | 空 |
+| `SEARXNG_SEARCH_PATH` | 搜索路径 | `/search` |
+| `SEARXNG_RESULT_COUNT` | 每次使用的最大结果数 | `5` |
+| `SEARXNG_TIMEOUT_MS` | 搜索请求超时 | `12000` |
+| `SEARXNG_USER_AGENT` | 搜索请求的 User-Agent | 已内置 |
+| `SEARXNG_LANGUAGE` | 语言参数 | 空 |
+| `SEARXNG_SAFESEARCH` | 安全搜索参数 | 空 |
+| `SEARXNG_INSTANCE_NAME` | Compose 中 SearXNG 实例名 | `aichat-searxng` |
+| `SEARXNG_PUBLIC_BASE_URL` | SearXNG 对外地址 | `http://localhost:8080/` |
+| `SEARXNG_SECRET` | SearXNG 密钥 | 必须修改 |
+| `GITHUB_API_BASE_URL` | GitHub API 地址 | `https://api.github.com` |
+
+## 常用命令
 
 ```bash
 npm run dev
@@ -160,125 +276,68 @@ npm run docker:logs
 npm run docker:down
 ```
 
-## 9. API 路由概览
+## API 概览
 
-- 公共配置：`GET /api/config`
-- 认证：
-  - `GET /api/auth/status`
-  - `POST /api/auth/register`
-  - `POST /api/auth/login`
-  - `POST /api/auth/logout`
-- 聊天：
-  - `POST /api/chat`
-  - `POST /api/chat/stream`
-- 模型：`GET /api/models`
-- 公告：`GET /api/announcements`
-- 管理员：`/api/admin/*`
-- 健康检查：`GET /healthz`
+### 公共接口
 
-## 10. 生产上线检查清单
+- `GET /api/config`
+- `GET /healthz`
 
-- 已修改生产密钥：`API_KEY`、`ADMIN_PASSWORD`
-- `SESSION_COOKIE_SECURE=true`（配合 HTTPS）
-- 可访问 `/healthz` 且返回 `status: ok`
-- 管理员可以正常登录
-- 模型连通性测试通过
-- 普通用户可发送对话并获得响应
-- `docker compose logs` 无持续报错
+### 认证接口
 
-## 11. 安全建议
+- `GET /api/auth/status`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
 
-- 不要提交 `.env`、运行时数据文件、密钥相关内容到 Git
-- 仅开放必要端口，建议通过 Nginx/Traefik 反代到 80/443
-- 定期轮换 `API_KEY` 和管理员密码
-- 建议对 `/api` 增加访问日志与告警
+### 聊天接口
 
-## 12. 文档索引
+- `POST /api/chat`
+- `POST /api/chat/stream`
 
-- 生产部署与排障手册：[`DEPLOYMENT.md`](./DEPLOYMENT.md)
-## 会话持久化（跨设备）
+### 模型接口
 
-- 登录用户的会话数据会持久化到服务端接口 `GET/PUT /api/conversations`，不再依赖浏览器 `localStorage`。
-- 游客模式（未登录）仍使用本地临时会话。
-- 新增环境变量：
-  - `CONVERSATIONS_CONFIG_PATH`（默认：`.runtime-conversations.json`）
-  - `MAX_STORED_CONVERSATIONS_PER_USER`（默认：`120`）
+- `GET /api/models`
 
+### 会话接口
 
-## 联网搜索（SearXNG）
+- `GET /api/conversations`
+- `PUT /api/conversations`
 
-项目已支持基于 SearXNG 的可选联网对话能力。开启后，后端会先检索网页结果，再把资料注入到对话上下文中发送给模型。
+### 公告接口
 
-### 功能开关说明
+- `GET /api/announcements`
 
-- `WEB_SEARCH_SERVER_ENABLED`：后端总开关，默认 `true`。设为 `false` 时前端不显示联网按钮。
-- `WEB_SEARCH_DEFAULT_ENABLED`：前端首次访问的默认状态，默认 `false`。
-- 前端发送消息时会携带 `webEnabled`，后端据此决定本次请求是否联网检索。
+### 联网状态接口
 
-说明：若浏览器本地已有用户手动切换记录，会优先使用本地记录；没有记录时，采用 `WEB_SEARCH_DEFAULT_ENABLED`。
+- `GET /api/web-search/status`
 
-### SearXNG 关键配置项
+说明：
 
-- `SEARXNG_BASE_URL`：SearXNG 服务地址。Docker Compose 场景建议 `http://searxng:8080`。
-- `SEARXNG_FALLBACK_BASE_URL`：可选回退地址。主地址失败时会尝试该地址。
-- `SEARXNG_SEARCH_PATH`：搜索路径，默认 `/search`。
-- `SEARXNG_RESULT_COUNT`：每次注入上下文的最大结果条数，默认 `5`。
-- `SEARXNG_TIMEOUT_MS`：SearXNG 请求超时（毫秒），默认 `12000`。
-- `SEARXNG_USER_AGENT`：后端请求 SearXNG 的 UA 标识。
-- `SEARXNG_LANGUAGE`：可选语言参数（留空表示由 SearXNG 默认策略决定）。
-- `SEARXNG_SAFESEARCH`：可选安全搜索等级参数。
-- `SEARXNG_SECRET`：SearXNG 密钥，必须修改，不能使用默认值。
-- `GITHUB_API_BASE_URL`：GitHub API 地址，默认 `https://api.github.com`。
-- `WEB_SEARCH_DIRECT_URL_ENABLED`：是否启用“链接直连解析”，默认 `true`。
-- `WEB_SEARCH_MAX_QUERIES`：单次请求最多并行检索的查询变体数，默认 `3`。
-- `WEB_SEARCH_FETCH_PAGE_COUNT`：对检索结果做正文抓取的最大页面数，默认 `3`。
-- `WEB_SEARCH_PAGE_TIMEOUT_MS`：单页面正文抓取超时（毫秒），默认 `8000`。
-- `WEB_SEARCH_MIN_SCORE`：结果重排最低分阈值，默认 `0.12`。
-- `WEB_SEARCH_FAILURE_NOTICE_ENABLED`：联网失败时是否显式注入“未成功联网”提示，默认 `true`。
+- 联网状态接口需要登录后访问
+- 管理员接口统一位于 `/api/admin/*`
 
-### 仓库内置配置文件
+## Docker 快速部署
 
-仓库内已提供 SearXNG 配置目录（`./searxng`）：
-
-- `searxng/settings.yml`
-- `searxng/limiter.toml`
-
-其中已包含以下默认策略：
-
-- 开启 JSON 输出（`search.formats` 包含 `json`），用于后端 API 调用。
-- 默认移除常见报错引擎（`ahmia`、`torch`、`wikidata`）。
-- 默认关闭 limiter（`server.limiter: false`）。
-
-### 直连解析能力（新增）
-
-当用户问题中包含 GitHub 仓库链接（例如 `https://github.com/wssxzh/aichat`）时，后端会优先直连 GitHub API 拉取仓库元信息与 README 摘要，再与 SearXNG 检索结果合并后交给模型。  
-这样可以显著减少“搜索引擎未收录导致资料不足”的情况。
-
-### 联网编排流程（增强）
-
-当前联网流程已升级为：
-
-1. 查询改写：把用户问题扩展为多个检索变体并行搜索。  
-2. 结果合并：融合 GitHub 直连解析结果与 SearXNG 检索结果。  
-3. 正文抓取：对 Top 结果抓取网页正文摘要，减少仅靠标题/短摘要误判。  
-4. 结果重排：按相关性与信息量打分筛选。  
-5. 失败显式化：检索失败时明确告诉模型“本次未成功联网”，避免假装有来源。
-
-### 快速自检（推荐）
-
-1. 先确认应用侧连通状态（需登录态 Cookie）：
+如果你想直接以容器运行：
 
 ```bash
-curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
+cp .env.production.example .env.production
+docker compose --env-file .env.production up -d --build
 ```
 
-返回 `connected: true` 表示应用到 SearXNG 链路正常。
+更多生产部署、备份、升级、回滚与排障内容，请看：
 
-2. Docker 场景建议用容器内地址验证，避免主机端口冲突误判：
+- [DEPLOYMENT.md](./DEPLOYMENT.md)
 
-```bash
-docker compose exec ai-chat-web \
-node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text()).then(t=>console.log(t.slice(0,300)))"
-```
+## 开发建议
 
-提示：如果你在主机上访问 `http://127.0.0.1:8080` 得到的是其它系统页面（而非 SearXNG JSON），通常是端口被其他服务占用，不代表 Compose 内部 `searxng` 不可用。
+- 不要把 `.env`、运行时数据文件和真实密钥提交到版本库
+- 生产环境务必修改 `API_KEY`、`ADMIN_PASSWORD`、`SEARXNG_SECRET`
+- 生产环境建议启用 HTTPS，并设置 `SESSION_COOKIE_SECURE=true`
+- 如果后续继续扩展功能，建议把 `register-api-routes.js` 进一步拆成多个领域路由文件
+
+## 文档索引
+
+- 项目总览与本地开发：[`README.md`](./README.md)
+- 生产部署与运维：[`DEPLOYMENT.md`](./DEPLOYMENT.md)

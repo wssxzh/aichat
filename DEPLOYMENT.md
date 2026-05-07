@@ -1,123 +1,187 @@
 # Deployment Guide
 
-本文档用于生产环境部署、升级、回滚、迁移和排障。
+本文档用于说明如何把当前项目部署到生产环境，以及如何进行升级、备份、恢复和常见故障排查。
 
-## 1. 前置条件
+文档内容以当前仓库的真实实现为准，包括：
 
-- 一台可访问 Docker 的 Linux 服务器
-- 已安装 Docker Engine 与 Compose v2
-- 已准备上游模型接口信息：
+- `Dockerfile`
+- `docker-compose.yml`
+- `src/server/` 分层服务端结构
+- `public/` 静态前端资源
+- `searxng/` 内置搜索配置
+
+## 部署目标
+
+部署后你将得到两个核心服务：
+
+1. `ai-chat-web`
+   提供 Web 页面、认证、聊天、会话持久化和管理员后台
+2. `searxng`
+   提供联网搜索能力
+
+默认数据会落在 Docker 命名卷中，不依赖宿主机目录权限。
+
+## 前置条件
+
+- 一台可运行 Docker 的 Linux 服务器
+- 已安装 `Docker Engine`
+- 已安装 `Docker Compose v2`
+- 已准备好可用的上游模型接口：
   - `API_BASE_URL`
   - `API_KEY`
-- 已准备业务域名（推荐）与 HTTPS 证书（推荐）
+- 建议准备反向代理与 HTTPS 证书
 
-建议先确认：
+先执行：
 
 ```bash
 docker --version
 docker compose version
 ```
 
-## 2. 首次生产部署
+## 首次部署
 
-1. 拉取代码
+### 1. 获取项目代码
 
 ```bash
-git clone https://github.com/wssxzh/aichat.git
-cd aichat
+git clone <your-repository-url>
+cd aichat-main
 ```
 
-2. 准备生产配置
+### 2. 复制生产环境变量模板
 
 ```bash
 cp .env.production.example .env.production
 ```
 
-3. 编辑 `.env.production`，至少修改以下变量
+### 3. 修改生产环境变量
+
+至少修改以下内容：
 
 - `API_BASE_URL`
 - `API_KEY`
 - `ADMIN_PASSWORD`
-- `SESSION_COOKIE_SECURE=true`（若外部访问走 HTTPS）
+- `SEARXNG_SECRET`
 
-4. 启动服务
+生产环境建议确认：
+
+- `SESSION_COOKIE_SECURE=true`
+- `WEB_SEARCH_SERVER_ENABLED=true`
+- `WEB_SEARCH_DEFAULT_ENABLED=false`
+- `SEARXNG_BASE_URL=http://searxng:8080`
+
+### 4. 启动服务
 
 ```bash
 docker compose --env-file .env.production up -d --build
 ```
 
-5. 验证部署
+### 5. 验证服务状态
 
 ```bash
 docker compose ps
 docker compose logs --tail=200 ai-chat-web
+docker compose logs --tail=120 searxng
 curl -fsS http://127.0.0.1:3000/healthz
 ```
 
-## 3. 配置说明（生产重点）
+只要 `/healthz` 返回 `status: ok`，说明 Web 服务已经正常启动。
 
-- 端口映射：默认 `${PORT:-3000}:3000`
-- 容器健康检查：自动访问 `/healthz`
-- 数据卷：默认 `aichat-data:/data`
-- 自动重启策略：`unless-stopped`
+## Compose 结构说明
 
-## 4. 数据持久化设计
+当前 `docker-compose.yml` 包含：
 
-### 4.1 默认方案（推荐）
+### `ai-chat-web`
 
-`docker-compose.yml` 使用 Docker 命名卷：
+- 基于当前项目构建镜像
+- 对外暴露 `${PORT:-3000}:3000`
+- 挂载数据卷 `aichat-data:/data`
+- 依赖 `searxng`
+- 内置健康检查
+- 使用 `unless-stopped` 自动重启策略
+
+### `searxng`
+
+- 使用官方镜像 `docker.io/searxng/searxng:latest`
+- 挂载本仓库中的 `./searxng` 配置目录
+- 使用缓存卷 `searxng-cache`
+- 使用 `unless-stopped` 自动重启策略
+
+## 推荐生产环境变量
+
+以下是生产最关键的一组变量：
+
+| 变量 | 建议值 |
+| --- | --- |
+| `API_BASE_URL` | 你的模型服务地址 |
+| `API_KEY` | 真实生产密钥 |
+| `ADMIN_USERNAME` | 自定义管理员名，或保留 `admin` |
+| `ADMIN_PASSWORD` | 强密码，必须替换 |
+| `SESSION_COOKIE_SECURE` | `true` |
+| `SEARXNG_SECRET` | 高强度随机字符串 |
+| `SEARXNG_BASE_URL` | `http://searxng:8080` |
+| `RUNTIME_CONFIG_PATH` | `/data/runtime-config.json` |
+| `USERS_CONFIG_PATH` | `/data/runtime-users.json` |
+| `ANNOUNCEMENTS_CONFIG_PATH` | `/data/runtime-announcements.json` |
+| `CONVERSATIONS_CONFIG_PATH` | `/data/runtime-conversations.json` |
+
+如果你需要调整联网搜索行为，也可以配置：
+
+- `SEARXNG_RESULT_COUNT`
+- `SEARXNG_TIMEOUT_MS`
+- `WEB_SEARCH_MAX_QUERIES`
+- `WEB_SEARCH_FETCH_PAGE_COUNT`
+- `WEB_SEARCH_PAGE_TIMEOUT_MS`
+- `WEB_SEARCH_MIN_SCORE`
+- `WEB_SEARCH_FAILURE_NOTICE_ENABLED`
+
+## 数据持久化
+
+### 默认方案
+
+当前 Compose 默认使用 Docker 命名卷：
 
 - `aichat-data:/data`
+- `searxng-cache:/var/cache/searxng`
 
-优点：
+这是推荐方案，因为它：
 
-- 不依赖宿主机目录权限
+- 避免宿主机目录权限问题
 - 降低 `EACCES` 风险
-- 迁移与备份更可控
+- 迁移和备份更稳定
 
-### 4.2 持久化内容
+### 持久化内容
 
-容器内 `/data` 下会保存：
+`/data` 目录下会保存：
 
-- `runtime-config.json`（运行时模型配置）
-- `runtime-users.json`（用户信息）
-- `runtime-announcements.json`（公告信息）
+- `runtime-config.json`
+- `runtime-users.json`
+- `runtime-announcements.json`
+- `runtime-conversations.json`
 
-## 5. 从旧版 bind mount 迁移
+分别对应：
 
-如果旧版本使用 `./data:/data`，推荐迁移到命名卷。
+- 运行时模型配置
+- 用户数据
+- 公告数据
+- 登录用户会话数据
 
-### 5.1 停止旧容器
+## 部署后检查清单
 
-```bash
-cd ~/aichat
-docker compose --env-file .env.production down --remove-orphans
-```
+上线后建议依次确认：
 
-### 5.2 创建并灌入命名卷数据（如需要保留历史数据）
+- `/healthz` 返回正常
+- 管理员可以登录
+- 管理页面可以加载模型列表
+- 普通用户可以注册和登录
+- 普通聊天接口正常
+- 流式聊天接口正常
+- 公告发布与删除正常
+- 登录用户跨刷新后会话仍存在
+- 如果启用了联网搜索，`/api/web-search/status` 返回 `connected: true`
 
-```bash
-docker volume create aichat_aichat-data
-docker run --rm -v "$(pwd)/data:/from" -v aichat_aichat-data:/to alpine sh -c 'cp -a /from/. /to/ || true'
-```
-
-### 5.3 重新启动新配置
-
-```bash
-docker compose --env-file .env.production up -d --build --force-recreate
-```
-
-### 5.4 验证
+## 升级流程
 
 ```bash
-docker compose ps
-docker compose logs --tail=200 ai-chat-web
-```
-
-## 6. 升级流程（无停机最小化）
-
-```bash
-cd ~/aichat
 git pull
 docker compose --env-file .env.production build
 docker compose --env-file .env.production up -d
@@ -125,37 +189,44 @@ docker compose ps
 docker compose logs --tail=200 ai-chat-web
 ```
 
-建议每次升级后执行：
+升级完成后建议做一次最小回归：
 
 - 管理员登录
 - 模型连通性测试
-- 聊天流式接口测试
+- 普通聊天
+- 流式聊天
+- 联网搜索测试
 
-## 7. 回滚流程
+## 回滚流程
 
-1. 查看最近提交
+### 1. 查看最近版本
 
 ```bash
 git log --oneline -n 10
 ```
 
-2. 切回目标版本并重启
+### 2. 切回目标版本
 
 ```bash
 git checkout <commit-id>
+```
+
+### 3. 重新部署
+
+```bash
 docker compose --env-file .env.production up -d --build --force-recreate
 ```
 
-3. 验证健康状态与核心功能
+### 4. 验证
 
 ```bash
 curl -fsS http://127.0.0.1:3000/healthz
 docker compose logs --tail=200 ai-chat-web
 ```
 
-## 8. 备份与恢复
+## 备份与恢复
 
-### 8.1 备份命名卷
+### 备份数据卷
 
 ```bash
 mkdir -p ~/backup/aichat
@@ -166,52 +237,146 @@ docker run --rm \
   alpine sh -c 'cd /data && tar czf /backup/aichat-data-$(date +%F-%H%M%S).tar.gz .'
 ```
 
-### 8.2 恢复命名卷
+### 恢复数据卷
+
+先停止服务：
 
 ```bash
-# 停服务
 docker compose --env-file .env.production down
+```
 
-# 清空并恢复
+再恢复备份：
 
+```bash
 docker run --rm \
   -v aichat_aichat-data:/data \
   -v ~/backup/aichat:/backup \
   alpine sh -c 'rm -rf /data/* && tar xzf /backup/<backup-file>.tar.gz -C /data'
+```
 
-# 启动
+最后重新启动：
+
+```bash
 docker compose --env-file .env.production up -d
 ```
 
-## 9. 常见故障排查
+## 从宿主机目录挂载迁移到命名卷
 
-### 9.1 容器反复重启
+如果你之前使用过 `./data:/data` 这种 bind mount，并且希望切换到当前默认命名卷方案，可以按下面操作：
+
+### 1. 停掉旧容器
+
+```bash
+docker compose --env-file .env.production down --remove-orphans
+```
+
+### 2. 创建并导入数据
+
+```bash
+docker volume create aichat_aichat-data
+docker run --rm -v "$(pwd)/data:/from" -v aichat_aichat-data:/to alpine sh -c 'cp -a /from/. /to/ || true'
+```
+
+### 3. 用新配置重启
+
+```bash
+docker compose --env-file .env.production up -d --build --force-recreate
+```
+
+## 反向代理建议
+
+生产环境建议通过 Nginx、Traefik 或类似组件对外暴露服务。
+
+建议规则：
+
+- 对外只开放 `80/443`
+- 应用容器只在内网暴露
+- 对 `/api/chat/stream` 禁用代理缓冲
+- 正确透传 `Host`、`X-Forwarded-*`、Cookie 相关头
+- 开启 HTTPS
+
+如果站点通过 HTTPS 对外访问，请确保：
+
+```env
+SESSION_COOKIE_SECURE=true
+```
+
+否则登录态可能异常。
+
+## SearXNG 联网搜索验证
+
+### 验证 Web 服务到 SearXNG 的链路
+
+需要先登录并携带 Cookie：
+
+```bash
+curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
+```
+
+期望返回：
+
+- `enabled: true`
+- `connected: true`
+
+### 容器内部直接验证 SearXNG
+
+```bash
+docker compose exec ai-chat-web \
+node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text()).then(t=>console.log(t.slice(0,300)))"
+```
+
+### 验证 GitHub 链接直连解析
+
+```bash
+curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=https://github.com/wssxzh/aichat"
+```
+
+如果返回结果中的样本来源含 `github-api`，说明直连解析已经生效。
+
+## 常见故障排查
+
+### 1. 容器反复重启
+
+先看状态和日志：
 
 ```bash
 docker compose ps
 docker compose logs --tail=300 ai-chat-web
+docker compose logs --tail=200 searxng
 ```
 
-重点看：
+常见原因：
 
 - 环境变量缺失
-- API 连接失败
-- 文件权限异常
+- `API_BASE_URL` 或 `API_KEY` 不可用
+- `SEARXNG_SECRET` 未正确设置
+- 数据目录权限异常
 
-### 9.2 配置解析失败
+### 2. 模型列表加载失败
 
-```bash
-docker compose --env-file .env.production config
-```
+优先检查：
 
-若报 YAML 错误，先检查 `docker-compose.yml` 的 `healthcheck.test` 是否保持字符串格式。
+- `API_BASE_URL`
+- `API_KEY`
+- 管理页内的“连通性测试”
+- 容器是否能访问上游模型接口
 
-### 9.3 出现 `EACCES: permission denied, open '/data/...'`
+### 3. 登录后立即失效
+
+重点检查：
+
+- 是否通过 HTTPS 对外访问
+- `SESSION_COOKIE_SECURE` 是否与访问方式匹配
+- 反向代理是否透传 Cookie 相关头
+
+### 4. 出现 `EACCES: permission denied, open '/data/...'`
 
 处理建议：
 
-- 使用当前默认命名卷配置（首选）
-- 若强制用 bind mount，先执行：
+- 优先使用默认命名卷方案
+- 如果必须使用 bind mount，请先在宿主机调整目录权限
+
+示例：
 
 ```bash
 mkdir -p data
@@ -219,191 +384,59 @@ chown -R 1000:1000 data
 chmod -R u+rwX,g+rwX data
 ```
 
-### 9.4 模型列表加载失败
+### 5. 联网搜索不可用
 
-- 确认 `API_BASE_URL`、`API_KEY` 正确
-- 通过管理页“连通性测试”验证上游
-- 检查服务器是否能访问上游接口
+依次检查：
 
-### 9.5 登录后马上失效
-
-- 生产 HTTPS 场景需 `SESSION_COOKIE_SECURE=true`
-- 检查反向代理是否透传 Cookie 相关头
-
-## 10. 反向代理建议（Nginx）
-
-- 对外仅开放 80/443
-- 应用容器端口只在内网暴露
-- 对 `/api/chat/stream` 关闭代理缓冲，保持长连接
-- 配置 TLS 并启用 HSTS（按业务策略）
-
-## 11. 运维巡检建议
-
-建议至少每日检查一次：
-
-- `docker compose ps`
-- `docker compose logs --tail=200 ai-chat-web`
-- `/healthz` 可用性
-- 备份任务是否执行成功
-
-## 12. 参考命令速查
-
-```bash
-# 启动
-docker compose --env-file .env.production up -d --build
-
-# 停止
-docker compose --env-file .env.production down
-
-# 重启单服务
-docker compose --env-file .env.production restart ai-chat-web
-
-# 查看配置展开结果
-docker compose --env-file .env.production config
-
-# 查看健康状态
-docker inspect --format='{{json .State.Health}}' ai-chat-web
-```
-## 会话数据落盘
-
-新增环境变量：
-
-- `CONVERSATIONS_CONFIG_PATH`：会话持久化文件路径（建议生产设置为 `/data/runtime-conversations.json`）。
-- `MAX_STORED_CONVERSATIONS_PER_USER`：每个用户最大保留会话数（默认 120）。
-
-应用通过 `GET/PUT /api/conversations` 保存登录用户的会话，支持跨设备同步。
-
-
-## 13. SearXNG 联网搜索集成
-
-当前 `docker-compose.yml` 已内置 `searxng` 服务，并默认与 `ai-chat-web` 打通。
-
-### 13.1 配置文件挂载关系
-
-- `./searxng/settings.yml -> /etc/searxng/settings.yml`
-- `./searxng/limiter.toml -> /etc/searxng/limiter.toml`
-
-### 13.2 `.env.production` 必填与推荐项
-
-- `SEARXNG_BASE_URL=http://searxng:8080`
-- `SEARXNG_SECRET=<请替换为随机强密钥>`（必填，不能使用默认值）
 - `WEB_SEARCH_SERVER_ENABLED=true`
-- `WEB_SEARCH_DEFAULT_ENABLED=false`
+- `SEARXNG_BASE_URL=http://searxng:8080`
+- `searxng` 容器已启动
+- `/api/web-search/status` 是否返回具体错误信息
+- `ai-chat-web` 日志中是否有 `SearXNG web search failed`
 
-推荐项：
+### 6. 宿主机访问 `127.0.0.1:8080` 不是 SearXNG
 
-- `SEARXNG_FALLBACK_BASE_URL=`（可选回退地址）
-- `SEARXNG_SEARCH_PATH=/search`
-- `SEARXNG_RESULT_COUNT=5`
-- `SEARXNG_TIMEOUT_MS=12000`
-- `SEARXNG_USER_AGENT=Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)`
-- `SEARXNG_LANGUAGE=`
-- `SEARXNG_SAFESEARCH=`
-- `GITHUB_API_BASE_URL=https://api.github.com`
-- `WEB_SEARCH_DIRECT_URL_ENABLED=true`
-- `WEB_SEARCH_MAX_QUERIES=3`
-- `WEB_SEARCH_FETCH_PAGE_COUNT=3`
-- `WEB_SEARCH_PAGE_TIMEOUT_MS=8000`
-- `WEB_SEARCH_MIN_SCORE=0.12`
-- `WEB_SEARCH_FAILURE_NOTICE_ENABLED=true`
+这通常不代表 Compose 内部链路有问题。
 
-### 13.3 启动与重建
-
-首次或常规启动：
-
-```bash
-docker compose --env-file .env.production up -d --build
-```
-
-配置变更后强制重建：
-
-```bash
-docker compose --env-file .env.production down --remove-orphans
-docker compose --env-file .env.production up -d --build --force-recreate
-```
-
-### 13.4 状态与日志检查
-
-```bash
-docker compose ps searxng
-docker compose logs --tail=120 searxng
-docker compose logs --tail=200 ai-chat-web
-```
-
-### 13.5 联网能力验证（强烈建议）
-
-1. 验证应用到 SearXNG 的链路（需登录态 Cookie）：
-
-```bash
-curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=openai"
-```
-
-返回 `connected: true` 说明应用链路正常。
-
-2. Docker 场景下，优先使用容器内地址验证 SearXNG：
+更可靠的判断方式是直接在容器内执行：
 
 ```bash
 docker compose exec ai-chat-web \
 node -e "fetch('http://searxng:8080/search?q=openai&format=json').then(r=>r.text()).then(t=>console.log(t.slice(0,300)))"
 ```
 
-3. 验证“GitHub 链接直连解析”（示例）：
+## 运维建议
+
+- 定期备份 `aichat-data` 数据卷
+- 定期轮换：
+  - `API_KEY`
+  - `ADMIN_PASSWORD`
+  - `SEARXNG_SECRET`
+- 保留最近几次部署版本，方便快速回滚
+- 监控：
+  - `docker compose ps`
+  - `/healthz`
+  - `ai-chat-web` 日志
+  - `searxng` 日志
+
+## 命令速查
 
 ```bash
-curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=https://github.com/wssxzh/aichat"
+# 首次或常规启动
+docker compose --env-file .env.production up -d --build
+
+# 停止服务
+docker compose --env-file .env.production down
+
+# 重启 Web 服务
+docker compose --env-file .env.production restart ai-chat-web
+
+# 查看展开后的 Compose 配置
+docker compose --env-file .env.production config
+
+# 查看 Web 服务日志
+docker compose --env-file .env.production logs -f ai-chat-web
+
+# 查看 SearXNG 日志
+docker compose --env-file .env.production logs -f searxng
 ```
-
-若返回 `connected: true` 且 `sample` 中出现 `github-api` 来源，说明直连解析生效。
-
-4. 验证“多查询 + 正文抓取”是否生效（示例）：
-
-```bash
-curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=帮我总结这个项目的技术栈和部署方式"
-```
-
-`sample` 中若出现较长 `snippet` 且来源带 `+page`，表示正文抓取与重排链路生效。
-
-### 13.6 常见故障与处理
-
-1. `searxng` 容器反复重启，日志包含：
-`server.secret_key is not changed ... ultrasecretkey`
-
-处理：
-
-- 在 `.env.production` 设置 `SEARXNG_SECRET` 为随机强密钥
-- 执行强制重建命令（见 13.3）
-
-2. 主机上 `curl http://127.0.0.1:8080/search?...` 返回的是其他系统页面
-
-原因：
-
-- 主机 8080 端口被其他服务占用，不一定是 `searxng`
-
-处理：
-
-- 不要仅凭主机 8080 判断
-- 使用 13.5 的容器内验证命令确认真实链路
-
-3. 页面可聊天但看起来“没有联网”
-
-检查顺序：
-
-- 确认前端 `Web` 开关为开启
-- 确认 `/api/web-search/status` 返回 `connected: true`
-- 查看 `ai-chat-web` 日志中 `SearXNG web search failed` 细节
-
-4. 粘贴 GitHub 仓库链接仍提示“资料不足”
-
-检查：
-
-- `WEB_SEARCH_DIRECT_URL_ENABLED` 是否为 `true`
-- 服务器是否可访问 `https://api.github.com`
-- 再用 13.5 的第 3 条命令检查 `sample` 是否包含 `github-api`
-
-5. 联网回答质量偏弱（只有短摘要）
-
-检查与调优：
-
-- 增大 `WEB_SEARCH_FETCH_PAGE_COUNT`（建议 3 到 5）
-- 适当提高 `WEB_SEARCH_PAGE_TIMEOUT_MS`（网络慢时建议 10000 到 15000）
-- 降低 `WEB_SEARCH_MIN_SCORE`（命中过少时可降到 `0.08`）

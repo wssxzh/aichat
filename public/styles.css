@@ -1584,8 +1584,8 @@ input[type="range"] {
 }
 
 #userWorkspace .user-admin-section.standalone .user-list {
-  height: min(52dvh, 520px);
-  max-height: none;
+  height: auto;
+  max-height: min(52dvh, 520px);
 }
 
 #announcementWorkspace .model-workspace-body {
@@ -1786,6 +1786,7 @@ input[type="range"] {
 .user-list {
   display: grid;
   gap: 6px;
+  align-content: start;
   max-height: 280px;
   overflow: auto;
   padding-right: 4px;
@@ -2408,7 +2409,7 @@ input[type="range"] {
   }
 
   #userWorkspace .user-admin-section.standalone .user-list {
-    height: min(46dvh, 380px);
+    height: auto;
   }
 
   .announcement-list {
@@ -2549,7 +2550,7 @@ input[type="range"] {
   }
 
   #userWorkspace .user-admin-section.standalone .user-list {
-    height: 220px;
+    height: auto;
   }
 
   .announcement-notice {
