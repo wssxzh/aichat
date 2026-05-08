@@ -25,6 +25,7 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
+      EXPRESS_JSON_LIMIT: ${EXPRESS_JSON_LIMIT:-15mb}
       API_BASE_URL: ${API_BASE_URL:-https://api.example.com}
       API_KEY: ${API_KEY:-demo-key-change-me}
       WEB_SEARCH_SERVER_ENABLED: ${WEB_SEARCH_SERVER_ENABLED:-true}

@@ -51,6 +51,77 @@ function toggleMessageFeedback(message, nextFeedback) {
   persistConversationState();
 }
 
+function syncMessageTextBlock(container, message) {
+  renderMessageContent(container, message);
+
+  const hasText = Boolean(compactText(getMessageTextContent(message)));
+  container.hidden = !hasText;
+
+  if (hasText) {
+    container.removeAttribute("aria-hidden");
+    return;
+  }
+
+  container.setAttribute("aria-hidden", "true");
+}
+
+function openImagePreview(attachment) {
+  if (!elements.imagePreviewModal || !elements.imagePreviewImage) {
+    return;
+  }
+
+  elements.imagePreviewImage.src = attachment.url;
+  elements.imagePreviewImage.alt = attachment.name || "上传图片";
+  elements.imagePreviewModal.hidden = false;
+}
+
+function closeImagePreview() {
+  if (!elements.imagePreviewModal || !elements.imagePreviewImage) {
+    return;
+  }
+
+  elements.imagePreviewModal.hidden = true;
+  elements.imagePreviewImage.removeAttribute("src");
+  elements.imagePreviewImage.alt = "";
+}
+
+function createMessageAttachmentElement(attachment) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-attachment-link";
+  button.setAttribute("aria-label", `查看大图：${attachment.name || "图片"}`);
+
+  const image = document.createElement("img");
+  image.className = "message-attachment-image";
+  image.src = attachment.url;
+  image.alt = attachment.name || "上传图片";
+  image.loading = "lazy";
+
+  button.appendChild(image);
+  button.addEventListener("click", () => {
+    openImagePreview(attachment);
+  });
+  return button;
+}
+
+function renderMessageAttachments(container, message) {
+  if (!(container instanceof HTMLElement)) {
+    return;
+  }
+
+  const attachments = getMessageAttachments(message);
+  container.innerHTML = "";
+  container.hidden = !attachments.length;
+
+  if (!attachments.length) {
+    return;
+  }
+
+  for (const attachment of attachments) {
+    container.appendChild(createMessageAttachmentElement(attachment));
+  }
+}
+
 function createMessageElement(message) {
   const article = document.createElement("article");
   article.className = `message-row ${message.role}`;
@@ -68,9 +139,13 @@ function createMessageElement(message) {
     const card = document.createElement("div");
     card.className = `message-card assistant-card${message.streaming ? " streaming" : ""}`;
 
+    const attachments = document.createElement("div");
+    attachments.className = "message-attachments";
+    renderMessageAttachments(attachments, message);
+
     const text = document.createElement("div");
     text.className = "message-text";
-    renderMessageContent(text, message);
+    syncMessageTextBlock(text, message);
 
     const footer = document.createElement("div");
     footer.className = "message-footer";
@@ -79,8 +154,6 @@ function createMessageElement(message) {
     time.className = "message-time";
     time.textContent = formatMessageTime(message);
     footer.appendChild(time);
-
-    card.append(text, footer);
 
     const actions = document.createElement("div");
     actions.className = "message-actions";
@@ -101,9 +174,14 @@ function createMessageElement(message) {
       toggleMessageFeedback(message, "dislike");
       syncFeedbackActionState(likeAction, dislikeAction, message.feedback);
     });
+    const deleteAction = createMessageAction("delete", "删除此条消息", async () => {
+      await deleteConversationMessagesFromMessageId(message.id);
+    });
     syncFeedbackActionState(likeAction, dislikeAction, normalizeMessageFeedback(message.feedback));
-    actions.append(copyAction, likeAction, dislikeAction);
+    deleteAction.classList.add("danger");
+    actions.append(copyAction, likeAction, dislikeAction, deleteAction);
 
+    card.append(attachments, text, footer);
     stack.append(card, actions);
     article.append(avatar, stack);
     return article;
@@ -111,24 +189,78 @@ function createMessageElement(message) {
 
   const stack = document.createElement("div");
   stack.className = "user-stack";
+  const attachments = getMessageAttachments(message);
+  const hasText = Boolean(compactText(getMessageTextContent(message)));
 
-  const card = document.createElement("div");
-  card.className = "message-card user-card";
-  const text = document.createElement("div");
-  text.className = "message-text";
-  renderMessageContent(text, message);
-  card.appendChild(text);
+  if (attachments.length) {
+    const attachmentStack = document.createElement("div");
+    attachmentStack.className = "message-user-attachments";
 
-  const footer = document.createElement("div");
-  footer.className = "message-footer";
+    const attachmentGrid = document.createElement("div");
+    attachmentGrid.className = "message-attachments user-attachments";
+    renderMessageAttachments(attachmentGrid, message);
 
-  const time = document.createElement("span");
-  time.className = "message-time";
-  time.textContent = formatMessageTime(message);
-  footer.appendChild(time);
+    attachmentStack.appendChild(attachmentGrid);
 
-  card.appendChild(footer);
-  stack.appendChild(card);
+    if (!hasText) {
+      const attachmentMeta = document.createElement("div");
+      attachmentMeta.className = "message-attachment-meta";
+
+      const attachmentTime = document.createElement("span");
+      attachmentTime.className = "message-time";
+      attachmentTime.textContent = formatMessageTime(message);
+      attachmentMeta.appendChild(attachmentTime);
+      attachmentStack.appendChild(attachmentMeta);
+    }
+
+    stack.appendChild(attachmentStack);
+  }
+
+  if (hasText || !attachments.length) {
+    const card = document.createElement("div");
+    card.className = "message-card user-card";
+
+    const text = document.createElement("div");
+    text.className = "message-text";
+    syncMessageTextBlock(text, message);
+
+    const footer = document.createElement("div");
+    footer.className = "message-footer";
+
+    const time = document.createElement("span");
+    time.className = "message-time";
+    time.textContent = formatMessageTime(message);
+    footer.appendChild(time);
+
+    card.append(text, footer);
+    stack.appendChild(card);
+  }
+
+  if (hasText || attachments.length) {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+
+    if (hasText) {
+      const copyAction = createMessageAction("copy", "复制消息", async (event) => {
+        try {
+          const actionButton = event.currentTarget;
+          await copyText(getMessageTextContent(message));
+          showCopyActionSuccess(actionButton);
+        } catch (error) {
+          showError("复制失败，请稍后重试。");
+        }
+      });
+
+      actions.append(copyAction);
+    }
+
+    const deleteAction = createMessageAction("delete", "删除此条消息", async () => {
+      await deleteConversationMessagesFromMessageId(message.id);
+    });
+    deleteAction.classList.add("danger");
+    actions.append(deleteAction);
+    stack.appendChild(actions);
+  }
 
   const avatar = document.createElement("div");
   avatar.className = "user-avatar";
@@ -137,7 +269,6 @@ function createMessageElement(message) {
   article.append(stack, avatar);
   return article;
 }
-
 function scrollChatToBottom() {
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
@@ -213,6 +344,7 @@ function syncMessageElement(message) {
   }
 
   const card = article.querySelector(".message-card");
+  const attachments = article.querySelector(".message-attachments");
   const text = article.querySelector(".message-text");
   const time = article.querySelector(".message-time");
 
@@ -220,8 +352,12 @@ function syncMessageElement(message) {
     card.classList.toggle("streaming", Boolean(message.streaming));
   }
 
+  if (attachments) {
+    renderMessageAttachments(attachments, message);
+  }
+
   if (text) {
-    renderMessageContent(text, message);
+    syncMessageTextBlock(text, message);
   }
 
   if (time) {
@@ -232,7 +368,6 @@ function syncMessageElement(message) {
     scrollChatToBottom();
   }
 }
-
 function setConfigButtonsState() {
   const isBusy = state.configForm.saving || state.configForm.testing;
   const canEditAdminConfig = isAdminUser() && !isBusy && !state.loading;
@@ -298,11 +433,39 @@ function buildRequestMessages() {
     .filter((message) => {
       return (
         (message.role === "user" || message.role === "assistant") &&
-        typeof message.content === "string" &&
-        message.content.trim().length > 0
+        hasRenderableMessageContent(message)
       );
     })
-    .map(({ role, content }) => ({ role, content }));
+    .map((message) => {
+      const role = message.role;
+      const content = getMessageTextContent(message);
+      const attachments = getMessageAttachments(message);
+
+      if (role === "user" && attachments.length) {
+        const parts = [];
+
+        if (compactText(content)) {
+          parts.push({
+            type: "text",
+            text: content
+          });
+        }
+
+        for (const attachment of attachments) {
+          parts.push({
+            type: "image_url",
+            image_url: {
+              url: attachment.url,
+              detail: "auto"
+            }
+          });
+        }
+
+        return { role, content: parts };
+      }
+
+      return { role, content };
+    });
 
   if (!systemPrompt) {
     return [{ role: "system", content: defaultMarkdownFormatInstruction }, ...conversationMessages];

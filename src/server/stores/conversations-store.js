@@ -12,6 +12,8 @@ function createConversationsStore(options) {
     maxConversationSystemPromptLength,
     maxConversationTitleLength
   } = options;
+  const maxConversationAttachmentsPerMessage = 3;
+  const maxConversationAttachmentUrlLength = 4 * 1024 * 1024;
 
 function clampConversationTemperature(value) {
   const numeric = Number(value);
@@ -35,19 +37,50 @@ function compactConversationText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function sanitizeConversationAttachment(input) {
+  const url = typeof input?.url === "string" ? input.url.trim() : "";
+  const isSupportedUrl = url.startsWith("data:image/") || /^https?:\/\//i.test(url);
+
+  if (!url || !isSupportedUrl) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof input?.id === "string" && input.id.trim()
+        ? input.id.trim().slice(0, 120)
+        : `attachment-${crypto.randomUUID()}`,
+    name:
+      typeof input?.name === "string" && input.name.trim()
+        ? input.name.trim().slice(0, 120)
+        : "图片",
+    mimeType:
+      typeof input?.mimeType === "string" && input.mimeType.trim()
+        ? input.mimeType.trim().slice(0, 120)
+        : "image/*",
+    size: Math.max(0, Number(input?.size) || 0),
+    url: url.slice(0, maxConversationAttachmentUrlLength)
+  };
+}
+
 function deriveConversationTitle(messages) {
   const firstUserMessage = Array.isArray(messages)
-    ? messages.find((message) => message.role === "user" && compactConversationText(message.content))
+    ? messages.find((message) => {
+      return (
+        message.role === "user" &&
+        (compactConversationText(message.content) || (Array.isArray(message.attachments) && message.attachments.length))
+      );
+    })
     : null;
 
   if (!firstUserMessage) {
-    return "New chat";
+    return "新对话";
   }
 
   const sourceText = compactConversationText(firstUserMessage.content);
 
   if (!sourceText) {
-    return "New chat";
+    return Array.isArray(firstUserMessage.attachments) && firstUserMessage.attachments.length ? "图片对话" : "新对话";
   }
 
   return sourceText.length > 24 ? `${sourceText.slice(0, 24)}...` : sourceText;
@@ -65,6 +98,9 @@ function sanitizeConversationMessage(input) {
     id,
     role: normalizeConversationRole(input?.role),
     content,
+    attachments: Array.isArray(input?.attachments)
+      ? input.attachments.map(sanitizeConversationAttachment).filter(Boolean).slice(0, maxConversationAttachmentsPerMessage)
+      : [],
     model,
     timestamp,
     feedback: normalizeConversationFeedback(input?.feedback),

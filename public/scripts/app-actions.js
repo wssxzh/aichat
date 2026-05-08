@@ -26,11 +26,59 @@ function refreshConversationMetadata(conversation) {
   conversation.updatedAt = Date.now();
 }
 
-function createUserMessage(content) {
+async function deleteConversationMessagesFromMessageId(messageId) {
+  if (state.loading) {
+    showError("请先停止当前生成后再删除消息。");
+    return false;
+  }
+
+  const activeConversation = getActiveConversation();
+
+  if (!activeConversation || !Array.isArray(activeConversation.messages)) {
+    return false;
+  }
+
+  const targetIndex = activeConversation.messages.findIndex((message) => message.id === messageId);
+
+  if (targetIndex < 0) {
+    return false;
+  }
+
+  const targetMessage = activeConversation.messages[targetIndex];
+  const targetTitle =
+    truncateText(
+      getMessagePreviewText(
+        targetMessage,
+        hasMessageAttachments(targetMessage) ? "图片消息" : "这条消息"
+      ),
+      24
+    ) || "这条消息";
+
+  const confirmed = await requestDeleteConfirmation(targetTitle, {
+    dialogTitle: "删除这条消息？",
+    dialogMessage: `确认删除“${targetTitle}”吗？此操作不可撤销。`,
+    fallbackTitle: "这条消息"
+  });
+
+  if (!confirmed) {
+    return false;
+  }
+
+  activeConversation.messages.splice(targetIndex, 1);
+  refreshConversationMetadata(activeConversation);
+  persistConversationState();
+  renderConversationList();
+  renderMessages();
+  clearError();
+  return true;
+}
+
+function createUserMessage(content, attachments = []) {
   return {
     id: createId("user"),
     role: "user",
     content,
+    attachments: attachments.map(sanitizeMessageAttachment).filter(Boolean),
     model: "",
     timestamp: Date.now()
   };
@@ -46,6 +94,92 @@ function createAssistantMessage(modelId) {
     feedback: "",
     streaming: true
   };
+}
+
+function readImageFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      resolve(String(reader.result || ""));
+    };
+
+    reader.onerror = () => {
+      reject(new Error(`读取图片“${file.name || "未命名文件"}”失败。`));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImageUploadInputChange(event) {
+  const files = Array.from(event.target?.files || []);
+
+  if (!files.length) {
+    return;
+  }
+
+  clearError();
+
+  if (state.composerAttachments.length >= maxComposerImageCount) {
+    showError(`最多只能上传 ${maxComposerImageCount} 张图片。`);
+    if (elements.imageUploadInput) {
+      elements.imageUploadInput.value = "";
+    }
+    return;
+  }
+
+  const remainingCount = maxComposerImageCount - state.composerAttachments.length;
+  const acceptedFiles = [];
+
+  for (const file of files.slice(0, remainingCount)) {
+    if (!String(file.type || "").startsWith("image/")) {
+      showError(`文件“${file.name}”不是支持的图片格式。`);
+      continue;
+    }
+
+    if (Number(file.size) > maxComposerImageFileSizeBytes) {
+      showError(`图片“${file.name}”超过 ${(maxComposerImageFileSizeBytes / 1024 / 1024).toFixed(0)}MB 限制。`);
+      continue;
+    }
+
+    acceptedFiles.push(file);
+  }
+
+  if (!acceptedFiles.length) {
+    if (elements.imageUploadInput) {
+      elements.imageUploadInput.value = "";
+    }
+    return;
+  }
+
+  try {
+    const attachments = [];
+
+    for (const file of acceptedFiles) {
+      const url = await readImageFileAsDataUrl(file);
+      const attachment = sanitizeMessageAttachment({
+        id: createId("attachment"),
+        name: file.name || "图片",
+        mimeType: file.type || "image/*",
+        size: Number(file.size) || 0,
+        url
+      });
+
+      if (attachment) {
+        attachments.push(attachment);
+      }
+    }
+
+    state.composerAttachments = [...state.composerAttachments, ...attachments].slice(0, maxComposerImageCount);
+    renderComposerAttachments();
+  } catch (error) {
+    showError(error.message || "读取图片失败，请稍后重试。");
+  } finally {
+    if (elements.imageUploadInput) {
+      elements.imageUploadInput.value = "";
+    }
+  }
 }
 
 function setConversationModel(modelId) {
@@ -709,9 +843,10 @@ async function sendMessage(event) {
 
   const activeConversation = getActiveConversation();
   const content = elements.userInput.value.trim();
+  const attachments = state.composerAttachments.map(sanitizeMessageAttachment).filter(Boolean);
 
-  if (!content) {
-    showError("请输入消息。");
+  if (!content && !attachments.length) {
+    showError("请输入消息或上传图片。");
     return;
   }
 
@@ -722,7 +857,7 @@ async function sendMessage(event) {
 
   clearError();
 
-  const userMessage = createUserMessage(content);
+  const userMessage = createUserMessage(content, attachments);
   activeConversation.messages.push(userMessage);
   refreshConversationMetadata(activeConversation);
 
@@ -738,6 +873,7 @@ async function sendMessage(event) {
   persistConversationState();
 
   elements.userInput.value = "";
+  clearComposerAttachments();
   autoResizeComposer();
   renderConversationList();
   enableChatAutoFollow();
@@ -842,6 +978,9 @@ function setLoading(isLoading) {
   elements.userNavButton.disabled = isLoading || state.configForm.saving || state.configForm.testing;
   elements.announcementNavButton.disabled = isLoading || state.configForm.saving || state.configForm.testing;
   elements.modelSelect.disabled = isLoading || !state.models.length;
+  if (elements.imageUploadButton) {
+    elements.imageUploadButton.disabled = isLoading;
+  }
   setConfigButtonsState();
   renderConversationList();
   renderModelList();
@@ -852,7 +991,7 @@ function setLoading(isLoading) {
     elements.sendButton.classList.add("stop");
     elements.sendButton.innerHTML =
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z" /></svg>';
-    elements.composerHint.textContent = `正在使用 ${activeConversation?.modelId || "当前模型"} 逐字生成，点击按钮可停止。`;
+    elements.composerHint.textContent = `正在使用 ${activeConversation?.modelId || "当前模型"} 流式生成，点击按钮可停止。`;
     return;
   }
 
@@ -875,6 +1014,7 @@ async function bootstrap() {
   updateSelectedModelView();
   renderConfigSummary();
   renderTestResult();
+  renderComposerAttachments();
   autoResizeComposer();
   setConfigButtonsState();
   setWebSearchEnabled(state.webSearchEnabled, { persist: false });
@@ -911,6 +1051,14 @@ async function bootstrap() {
   elements.saveConfigButton.addEventListener("click", saveApiConfig);
   elements.testConfigButton.addEventListener("click", testApiConfig);
   elements.chatForm.addEventListener("submit", sendMessage);
+  if (elements.imageUploadButton && elements.imageUploadInput) {
+    elements.imageUploadButton.addEventListener("click", () => {
+      elements.imageUploadInput.click();
+    });
+  }
+  if (elements.imageUploadInput) {
+    elements.imageUploadInput.addEventListener("change", handleImageUploadInputChange);
+  }
   if (elements.webSearchToggleButton) {
     elements.webSearchToggleButton.addEventListener("click", () => {
       setWebSearchEnabled(!state.webSearchEnabled);
@@ -958,6 +1106,16 @@ async function bootstrap() {
     elements.announcementNotice.addEventListener("click", (event) => {
       if (event.target === elements.announcementNotice) {
         closeAnnouncementNotice();
+      }
+    });
+  }
+  if (elements.imagePreviewCloseButton) {
+    elements.imagePreviewCloseButton.addEventListener("click", closeImagePreview);
+  }
+  if (elements.imagePreviewModal) {
+    elements.imagePreviewModal.addEventListener("click", (event) => {
+      if (event.target === elements.imagePreviewModal) {
+        closeImagePreview();
       }
     });
   }
@@ -1045,6 +1203,11 @@ async function bootstrap() {
 
     if (event.key === "Escape" && !elements.announcementNotice.hidden) {
       closeAnnouncementNotice();
+      return;
+    }
+
+    if (event.key === "Escape" && elements.imagePreviewModal && !elements.imagePreviewModal.hidden) {
+      closeImagePreview();
       return;
     }
 

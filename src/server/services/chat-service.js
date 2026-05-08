@@ -14,14 +14,47 @@ function sortModels(left, right) {
   return String(left.id || "").localeCompare(String(right.id || ""));
 }
 
+function isValidMessagePart(part) {
+  if (!part || typeof part !== "object" || Array.isArray(part)) {
+    return false;
+  }
+
+  if (part.type === "text") {
+    return typeof part.text === "string" && part.text.trim().length > 0;
+  }
+
+  if (part.type === "image_url") {
+    const url = String(part?.image_url?.url || "").trim();
+    const detail = part?.image_url?.detail;
+    const isSupportedUrl = url.startsWith("data:image/") || /^https?:\/\//i.test(url);
+    const isSupportedDetail =
+      detail === undefined || detail === "auto" || detail === "low" || detail === "high";
+
+    return Boolean(isSupportedUrl && isSupportedDetail);
+  }
+
+  return false;
+}
+
+function isValidMessageContent(content) {
+  if (typeof content === "string") {
+    return content.trim().length > 0;
+  }
+
+  if (!Array.isArray(content) || !content.length) {
+    return false;
+  }
+
+  return content.every(isValidMessagePart);
+}
+
 function isValidMessages(messages) {
   return Array.isArray(messages) && messages.every((message) => {
     return (
       message &&
       typeof message.role === "string" &&
       message.role.trim().length > 0 &&
-      typeof message.content === "string" &&
-      message.content.trim().length > 0
+      isValidMessageContent(message.content)
     );
   });
 }

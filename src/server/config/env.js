@@ -24,6 +24,7 @@ const searxngSearchPath = (() => {
 const env = {
   rootDir,
   publicDir,
+  expressJsonLimit: String(process.env.EXPRESS_JSON_LIMIT || "15mb").trim() || "15mb",
   port: Number(process.env.PORT) || 3000,
   host: process.env.HOST || "0.0.0.0",
   defaultRequestTimeoutMs: 60000,

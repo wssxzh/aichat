@@ -27,6 +27,9 @@ const defaultMarkdownFormatInstruction = [
   "涉及步骤时优先使用有序或无序列表，不要输出纯文本堆叠。"
 ].join("\n");
 const chatAutoFollowBottomThresholdPx = 2;
+const maxComposerImageCount = 3;
+const maxComposerImageFileSizeBytes = 2 * 1024 * 1024;
+const maxStoredImageAttachmentUrlLength = 4 * 1024 * 1024;
 const recentListInitialBatch = 24;
 const recentListBatchSize = 20;
 const recentListLoadOffsetPx = 88;
@@ -58,6 +61,9 @@ const elements = {
   announcementNoticeMeta: document.getElementById("announcementNoticeMeta"),
   announcementNoticeText: document.getElementById("announcementNoticeText"),
   announcementNoticeCloseButton: document.getElementById("announcementNoticeCloseButton"),
+  imagePreviewModal: document.getElementById("imagePreviewModal"),
+  imagePreviewImage: document.getElementById("imagePreviewImage"),
+  imagePreviewCloseButton: document.getElementById("imagePreviewCloseButton"),
   chatMessages: document.getElementById("chatMessages"),
   settingsPanel: document.getElementById("settingsPanel"),
   toggleSettingsButton: document.getElementById("toggleSettingsButton"),
@@ -67,6 +73,9 @@ const elements = {
   temperatureValue: document.getElementById("temperatureValue"),
   chatForm: document.getElementById("chatForm"),
   userInput: document.getElementById("userInput"),
+  imageUploadButton: document.getElementById("imageUploadButton"),
+  imageUploadInput: document.getElementById("imageUploadInput"),
+  composerAttachmentList: document.getElementById("composerAttachmentList"),
   sendButton: document.getElementById("sendButton"),
   composerHint: document.getElementById("composerHint"),
   connectionStatus: document.getElementById("connectionStatus"),
@@ -122,6 +131,8 @@ const iconMarkup = {
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10M7 10H4.5A1.5 1.5 0 0 0 3 11.5v6A1.5 1.5 0 0 0 4.5 19H7m0-9 3.4-6.8A1.5 1.5 0 0 1 13.2 3l.8.53a2.5 2.5 0 0 1 1.1 2.58L14.5 10H18a2 2 0 0 1 2 2.4l-1 5A2 2 0 0 1 17 19H7" /></svg>',
   dislike:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 14V4m0 10h2.5A1.5 1.5 0 0 1 21 12.5v-6A1.5 1.5 0 0 1 19.5 5H17m0 9-3.4 6.8a1.5 1.5 0 0 1-2.8.2l-.8-.53a2.5 2.5 0 0 1-1.1-2.58L9.5 14H6a2 2 0 0 1-2-2.4l1-5A2 2 0 0 1 7 5h10" /></svg>',
+  delete:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M9 4h6l1 3H8l1-3Zm-2 3h10l-1 12H8L7 7Z" /></svg>',
   more:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01" /></svg>',
   sound:
@@ -160,6 +171,7 @@ const state = {
   chatScroll: {
     autoFollow: true
   },
+  composerAttachments: [],
   recentList: {
     loadedCount: 0,
     signature: ""
@@ -384,7 +396,137 @@ function truncateText(text, maxLength = 28) {
 }
 
 function getMessageTextContent(message) {
-  return typeof message?.content === "string" ? message.content : "";
+  if (typeof message?.content === "string") {
+    return message.content;
+  }
+
+  if (!Array.isArray(message?.content)) {
+    return "";
+  }
+
+  return message.content
+    .map((part) => {
+      if (typeof part === "string") {
+        return part;
+      }
+
+      if (part?.type === "text" && typeof part.text === "string") {
+        return part.text;
+      }
+
+      return "";
+    })
+    .join("\n");
+}
+
+function sanitizeMessageAttachment(input) {
+  const rawUrl = typeof input?.url === "string" ? input.url.trim() : "";
+  const isSupportedUrl = rawUrl.startsWith("data:image/") || /^https?:\/\//i.test(rawUrl);
+
+  if (!rawUrl || !isSupportedUrl) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof input?.id === "string" && input.id.trim()
+        ? input.id.trim().slice(0, 120)
+        : createId("attachment"),
+    name:
+      typeof input?.name === "string" && input.name.trim()
+        ? input.name.trim().slice(0, 120)
+        : "图片",
+    mimeType:
+      typeof input?.mimeType === "string" && input.mimeType.trim()
+        ? input.mimeType.trim().slice(0, 120)
+        : "image/*",
+    size: Math.max(0, Number(input?.size) || 0),
+    url: rawUrl.slice(0, maxStoredImageAttachmentUrlLength)
+  };
+}
+
+function getMessageAttachments(message) {
+  return Array.isArray(message?.attachments)
+    ? message.attachments.map(sanitizeMessageAttachment).filter(Boolean)
+    : [];
+}
+
+function hasMessageAttachments(message) {
+  return getMessageAttachments(message).length > 0;
+}
+
+function hasRenderableMessageContent(message) {
+  return Boolean(compactText(getMessageTextContent(message)) || hasMessageAttachments(message));
+}
+
+function getMessagePreviewText(message, attachmentFallback = "图片消息") {
+  const text = compactText(getMessageTextContent(message));
+
+  if (text) {
+    return text;
+  }
+
+  if (hasMessageAttachments(message)) {
+    return attachmentFallback;
+  }
+
+  return "";
+}
+
+function renderComposerAttachments() {
+  if (!elements.composerAttachmentList) {
+    return;
+  }
+
+  state.composerAttachments = state.composerAttachments
+    .map(sanitizeMessageAttachment)
+    .filter(Boolean)
+    .slice(0, maxComposerImageCount);
+
+  if (!state.composerAttachments.length) {
+    elements.composerAttachmentList.hidden = true;
+    elements.composerAttachmentList.innerHTML = "";
+    return;
+  }
+
+  elements.composerAttachmentList.hidden = false;
+  elements.composerAttachmentList.innerHTML = "";
+
+  for (const attachment of state.composerAttachments) {
+    const item = document.createElement("div");
+    item.className = "composer-attachment-item";
+
+    const preview = document.createElement("img");
+    preview.className = "composer-attachment-preview";
+    preview.src = attachment.url;
+    preview.alt = attachment.name || "上传图片";
+    preview.loading = "lazy";
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "composer-attachment-remove";
+    removeButton.setAttribute("aria-label", `移除图片：${attachment.name || "图片"}`);
+    removeButton.title = "移除图片";
+    removeButton.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg>';
+    removeButton.addEventListener("click", () => {
+      state.composerAttachments = state.composerAttachments.filter((item) => item.id !== attachment.id);
+      renderComposerAttachments();
+    });
+
+    item.append(preview, removeButton);
+    elements.composerAttachmentList.appendChild(item);
+  }
+}
+
+function clearComposerAttachments() {
+  state.composerAttachments = [];
+
+  if (elements.imageUploadInput) {
+    elements.imageUploadInput.value = "";
+  }
+
+  renderComposerAttachments();
 }
 
 function escapeHtml(text) {
@@ -463,14 +605,14 @@ function renderMessageContent(container, message) {
 
 function deriveConversationTitle(messages) {
   const firstUserMessage = Array.isArray(messages)
-    ? messages.find((message) => message.role === "user" && compactText(message.content))
+    ? messages.find((message) => message.role === "user" && hasRenderableMessageContent(message))
     : null;
 
   if (!firstUserMessage) {
     return "新对话";
   }
 
-  return truncateText(compactText(firstUserMessage.content), 24) || "新对话";
+  return truncateText(getMessagePreviewText(firstUserMessage, "图片对话"), 24) || "新对话";
 }
 
 function normalizeMessageFeedback(feedback) {
@@ -481,7 +623,8 @@ function sanitizeStoredMessage(message) {
   return {
     id: typeof message?.id === "string" ? message.id : createId(message?.role || "message"),
     role: message?.role === "assistant" ? "assistant" : "user",
-    content: typeof message?.content === "string" ? message.content : "",
+    content: getMessageTextContent(message),
+    attachments: getMessageAttachments(message),
     model: typeof message?.model === "string" ? message.model : "",
     timestamp: Number(message?.timestamp) || Date.now(),
     feedback: normalizeMessageFeedback(message?.feedback),
@@ -1804,17 +1947,17 @@ function sortConversations(conversations) {
 
 function conversationHasHistory(conversation) {
   return Array.isArray(conversation?.messages) && conversation.messages.some((message) => {
-    return message.role === "user" && typeof message.content === "string" && message.content.trim().length > 0;
+    return message.role === "user" && hasRenderableMessageContent(message);
   });
 }
 
 function getConversationPreview(conversation) {
   const lastMeaningfulMessage = [...conversation.messages]
     .reverse()
-    .find((message) => compactText(message.content));
+    .find((message) => hasRenderableMessageContent(message));
 
   if (lastMeaningfulMessage) {
-    return truncateText(compactText(lastMeaningfulMessage.content), 36);
+    return truncateText(getMessagePreviewText(lastMeaningfulMessage), 36);
   }
 
   if (compactText(conversation.systemPrompt)) {

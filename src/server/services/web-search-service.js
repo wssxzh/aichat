@@ -69,6 +69,32 @@ function truncateText(value, maxLength) {
   return `${normalized.slice(0, maxLength)}...`;
 }
 
+function extractTextFromMessageContent(content) {
+  if (typeof content === "string") {
+    return compactConversationText(content);
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return compactConversationText(
+    content
+      .map((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) {
+          return "";
+        }
+
+        if (part.type === "text" && typeof part.text === "string") {
+          return part.text;
+        }
+
+        return "";
+      })
+      .join(" ")
+  );
+}
+
 function extractLatestUserQuery(messages = []) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -77,7 +103,7 @@ function extractLatestUserQuery(messages = []) {
       continue;
     }
 
-    const normalized = compactConversationText(message?.content);
+    const normalized = extractTextFromMessageContent(message?.content);
 
     if (normalized) {
       return normalized.slice(0, 500);

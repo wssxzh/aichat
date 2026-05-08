@@ -8,7 +8,7 @@ function createApp(dependencies) {
   const app = express();
   const publicIndexPath = path.join(dependencies.env.publicDir, "index.html");
 
-  app.use(express.json({ limit: "4mb" }));
+  app.use(express.json({ limit: dependencies.env.expressJsonLimit }));
   app.use(express.static(dependencies.env.publicDir));
 
   registerApiRoutes(app, dependencies);
