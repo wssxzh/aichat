@@ -38,6 +38,7 @@ function registerApiRoutes(app, dependencies) {
     },
     runtimeConfigStore: {
       getRuntimeConfig,
+      getEnabledApiConfigs,
       serializeConfigForClient,
       updateRuntimeConfig,
       maskApiKey,
@@ -62,8 +63,46 @@ function registerApiRoutes(app, dependencies) {
       computeWebResultScore,
       enrichPayloadWithWebSearch
     },
-    chatService: { fetchModelsWithConfig, buildChatPayload, sendSseEvent }
+    chatService: {
+      fetchModelsWithConfigs,
+      buildChatPayload,
+      buildImageGenerationPayload,
+      generateImagesWithConfig,
+      sendSseEvent
+    }
   } = dependencies;
+
+function resolveRequestApiConfig(sourceApiId) {
+  const enabledApiConfigs = getEnabledApiConfigs();
+
+  if (!enabledApiConfigs.length) {
+    const error = new Error("当前没有启用的 API 配置。");
+    error.status = 503;
+    throw error;
+  }
+
+  const normalizedSourceApiId = String(sourceApiId || "").trim();
+
+  if (normalizedSourceApiId) {
+    const matchedApiConfig = enabledApiConfigs.find((item) => item.id === normalizedSourceApiId);
+
+    if (!matchedApiConfig) {
+      const error = new Error("所选模型来源接口不存在或已被禁用。");
+      error.status = 400;
+      throw error;
+    }
+
+    return matchedApiConfig;
+  }
+
+  if (enabledApiConfigs.length === 1) {
+    return enabledApiConfigs[0];
+  }
+
+  const error = new Error("当前配置了多个 API，请明确指定模型来源接口。");
+  error.status = 400;
+  throw error;
+}
 
 app.get("/api/config", (request, response) => {
   response.json(serializeConfigForClient(false));
@@ -333,12 +372,11 @@ app.get("/api/admin/config", (request, response) => {
 
 app.post("/api/admin/config", (request, response, next) => {
   try {
-    const savedConfig = updateRuntimeConfig(readConfigFromBody(request.body));
+    updateRuntimeConfig(readConfigFromBody(request.body));
 
     response.json({
       message: "配置已保存。",
-      ...serializeConfigForClient(true),
-      apiBaseUrl: savedConfig.apiBaseUrl
+      ...serializeConfigForClient(true)
     });
   } catch (error) {
     error.status = error.status || 400;
@@ -349,15 +387,23 @@ app.post("/api/admin/config", (request, response, next) => {
 app.post("/api/admin/config/test", async (request, response, next) => {
   try {
     const config = readConfigFromBody(request.body, true);
-    const payload = await fetchModelsWithConfig(config);
+    const enabledApiConfigs = Array.isArray(config.apiConfigs)
+      ? config.apiConfigs.filter((item) => item.enabled)
+      : [];
+    const payload = await fetchModelsWithConfigs(enabledApiConfigs);
 
     response.json({
       ok: true,
-      apiBaseUrl: config.apiBaseUrl,
-      keyConfigured: Boolean(config.apiKey),
-      apiKeyPreview: maskApiKey(config.apiKey),
-      modelCount: payload.data.length,
-      sampleModels: payload.data.slice(0, 8).map((model) => model.id)
+      apiBaseUrl: enabledApiConfigs[0]?.apiBaseUrl || "",
+      keyConfigured: enabledApiConfigs.some((item) => Boolean(item.apiKey)),
+      apiKeyPreview: maskApiKey(enabledApiConfigs[0]?.apiKey || ""),
+      apiCount: enabledApiConfigs.length,
+      modelCount: payload.summary?.totalModelCount || payload.allModels?.length || payload.data.length,
+      chatModelCount: payload.summary?.chatModelCount || payload.data.length,
+      imageModelCount: payload.summary?.imageModelCount || payload.imageModels?.length || 0,
+      sampleModels: (payload.data || []).slice(0, 8).map((model) => model.id),
+      sampleImageModels: (payload.imageModels || []).slice(0, 6).map((model) => model.id),
+      apiStatuses: payload.apiStatuses || []
     });
   } catch (error) {
     next(error);
@@ -508,7 +554,7 @@ app.delete("/api/admin/users/:id", (request, response, next) => {
 
 app.get("/api/models", async (request, response, next) => {
   try {
-    response.json(await fetchModelsWithConfig(getRuntimeConfig()));
+    response.json(await fetchModelsWithConfigs(getEnabledApiConfigs()));
   } catch (error) {
     next(error);
   }
@@ -522,10 +568,10 @@ app.post("/api/chat", requireAuth, async (request, response, next) => {
   }
 
   try {
-    const config = getRuntimeConfig();
+    const config = resolveRequestApiConfig(result.sourceApiId);
     const payload = await enrichPayloadWithWebSearch(result.payload, request.body);
     const requestBody = JSON.stringify(payload);
-    const upstreamResponse = await requestJsonWithRetry(`${config.apiBaseUrl}/v1/chat/completions`, {
+    const upstreamResponse = await requestJsonWithRetry(`${config.apiBaseUrl}/chat/completions`, {
       method: "POST",
       headers: createApiHeaders(config.apiKey, {
         "Content-Type": "application/json",
@@ -552,10 +598,10 @@ app.post("/api/chat/stream", requireAuth, async (request, response, next) => {
     return response.status(result.error.status).json(result.error.payload);
   }
 
-  const config = getRuntimeConfig();
+  const config = resolveRequestApiConfig(result.sourceApiId);
   const payload = await enrichPayloadWithWebSearch(result.payload, request.body);
   const requestBody = JSON.stringify(payload);
-  const target = new URL(`${config.apiBaseUrl}/v1/chat/completions`);
+  const target = new URL(`${config.apiBaseUrl}/chat/completions`);
   const client = getHttpClient(target);
   let streamStarted = false;
   let clientClosed = false;
@@ -699,6 +745,21 @@ app.post("/api/chat/stream", requireAuth, async (request, response, next) => {
   });
 
   startStreamAttempt(1);
+});
+
+app.post("/api/images/generations", requireAuth, async (request, response, next) => {
+  const result = buildImageGenerationPayload(request.body);
+
+  if (result.error) {
+    return response.status(result.error.status).json(result.error.payload);
+  }
+
+  try {
+    const config = resolveRequestApiConfig(result.sourceApiId);
+    response.json(await generateImagesWithConfig(config, result.payload));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/healthz", (request, response) => {

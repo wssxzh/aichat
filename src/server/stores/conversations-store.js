@@ -102,6 +102,8 @@ function sanitizeConversationMessage(input) {
       ? input.attachments.map(sanitizeConversationAttachment).filter(Boolean).slice(0, maxConversationAttachmentsPerMessage)
       : [],
     model,
+    sourceApiId:
+      typeof input?.sourceApiId === "string" ? input.sourceApiId.slice(0, 120) : "",
     timestamp,
     feedback: normalizeConversationFeedback(input?.feedback),
     streaming: false
@@ -123,6 +125,7 @@ function sanitizeConversationRecord(input) {
     createdAt,
     updatedAt: Number(input?.updatedAt) || createdAt,
     modelId: typeof input?.modelId === "string" ? input.modelId.slice(0, 200) : "",
+    sourceApiId: typeof input?.sourceApiId === "string" ? input.sourceApiId.slice(0, 120) : "",
     systemPrompt: typeof input?.systemPrompt === "string"
       ? input.systemPrompt.slice(0, maxConversationSystemPromptLength)
       : "",

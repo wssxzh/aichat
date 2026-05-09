@@ -41,12 +41,14 @@ const elements = {
   sidebarCollapseButton: document.getElementById("sidebarCollapseButton"),
   sidebarMobileButton: document.getElementById("sidebarMobileButton"),
   conversationNavButton: document.getElementById("conversationNavButton"),
+  imageGenNavButton: document.getElementById("imageGenNavButton"),
   modelNavButton: document.getElementById("modelNavButton"),
   userNavButton: document.getElementById("userNavButton"),
   announcementNavButton: document.getElementById("announcementNavButton"),
   newChatButton: document.getElementById("newChatButton"),
   recentList: document.getElementById("recentList"),
   chatWorkspace: document.getElementById("chatWorkspace"),
+  imageWorkspace: document.getElementById("imageWorkspace"),
   modelWorkspace: document.getElementById("modelWorkspace"),
   userWorkspace: document.getElementById("userWorkspace"),
   announcementWorkspace: document.getElementById("announcementWorkspace"),
@@ -78,10 +80,20 @@ const elements = {
   composerAttachmentList: document.getElementById("composerAttachmentList"),
   sendButton: document.getElementById("sendButton"),
   composerHint: document.getElementById("composerHint"),
+  imageGenerationStatus: document.getElementById("imageGenerationStatus"),
+  imageGenerationBanner: document.getElementById("imageGenerationBanner"),
+  imageGenerationModelMeta: document.getElementById("imageGenerationModelMeta"),
+  imageModelSelect: document.getElementById("imageModelSelect"),
+  imageSizeSelect: document.getElementById("imageSizeSelect"),
+  imagePromptInput: document.getElementById("imagePromptInput"),
+  generateImageButton: document.getElementById("generateImageButton"),
+  imageResultList: document.getElementById("imageResultList"),
   connectionStatus: document.getElementById("connectionStatus"),
   apiBaseUrl: document.getElementById("apiBaseUrl"),
   keyStatus: document.getElementById("keyStatus"),
   modelStats: document.getElementById("modelStats"),
+  apiConfigList: document.getElementById("apiConfigList"),
+  addApiConfigButton: document.getElementById("addApiConfigButton"),
   configApiBaseUrlInput: document.getElementById("configApiBaseUrlInput"),
   configApiKeyInput: document.getElementById("configApiKeyInput"),
   saveConfigButton: document.getElementById("saveConfigButton"),
@@ -145,15 +157,18 @@ const storedWebSearchPreference = readStorageItem(storageKeys.webSearchEnabled);
 
 const state = {
   apiBaseUrl: "",
+  apiConfigs: [],
   keyConfigured: false,
   models: [],
+  allModels: [],
+  imageModels: [],
   filteredModels: [],
   conversationAccountKey: defaultConversationAccountKey,
   conversations: [],
   activeConversationId: "",
   activeSidebarTab:
     getSidebarTabFromHash() ||
-    (["models", "users", "announcements"].includes(readStorageItem(storageKeys.sidebarTab))
+    (["images", "models", "users", "announcements"].includes(readStorageItem(storageKeys.sidebarTab))
       ? readStorageItem(storageKeys.sidebarTab)
       : "conversations"),
   loading: false,
@@ -172,6 +187,12 @@ const state = {
     autoFollow: true
   },
   composerAttachments: [],
+  imageGeneration: {
+    modelId: "",
+    sourceApiId: "",
+    loading: false,
+    results: []
+  },
   recentList: {
     loadedCount: 0,
     signature: ""
@@ -189,8 +210,7 @@ const state = {
     currentAccountKey: defaultConversationAccountKey
   },
   configForm: {
-    apiBaseUrl: "",
-    apiKey: "",
+    apiConfigs: [],
     saving: false,
     testing: false,
     testResult: null
@@ -215,12 +235,18 @@ const state = {
     announcementsLoading: false
   }
 };
+const maxStoredImageGenerationResults = 24;
+const imageGenerationSessionStateByAccount = new Map();
 
 function getSidebarTabFromHash() {
   const normalized = window.location.hash.replace(/^#/, "").trim().toLowerCase();
 
   if (normalized === "models") {
     return "models";
+  }
+
+  if (normalized === "images" || normalized === "image" || normalized === "generate") {
+    return "images";
   }
 
   if (normalized === "users" || normalized === "user") {
@@ -393,6 +419,64 @@ function compactText(text) {
 
 function truncateText(text, maxLength = 28) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function buildModelKey(sourceApiId, modelId) {
+  return `${String(sourceApiId || "").trim()}::${String(modelId || "").trim()}`;
+}
+
+function parseModelKey(value) {
+  const normalized = String(value || "").trim();
+  const separatorIndex = normalized.indexOf("::");
+
+  if (separatorIndex < 0) {
+    return {
+      sourceApiId: "",
+      modelId: normalized
+    };
+  }
+
+  return {
+    sourceApiId: normalized.slice(0, separatorIndex),
+    modelId: normalized.slice(separatorIndex + 2)
+  };
+}
+
+function sanitizeClientApiConfigEntry(input, index = 0) {
+  return {
+    id:
+      typeof input?.id === "string" && input.id.trim()
+        ? input.id.trim().slice(0, 120)
+        : createId("api"),
+    name:
+      typeof input?.name === "string" && input.name.trim()
+        ? input.name.trim().slice(0, 80)
+        : `接口 ${index + 1}`,
+    apiBaseUrl: typeof input?.apiBaseUrl === "string" ? input.apiBaseUrl.trim() : "",
+    apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
+    apiKeyPreview: typeof input?.apiKeyPreview === "string" ? input.apiKeyPreview.trim() : "",
+    keyConfigured: Boolean(input?.keyConfigured || (typeof input?.apiKey === "string" && input.apiKey.trim())),
+    enabled: input?.enabled !== false
+  };
+}
+
+function normalizeClientApiConfigList(list) {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+
+  const seenIds = new Set();
+
+  return list.map((item, index) => {
+    const normalizedItem = sanitizeClientApiConfigEntry(item, index);
+
+    while (seenIds.has(normalizedItem.id)) {
+      normalizedItem.id = createId("api");
+    }
+
+    seenIds.add(normalizedItem.id);
+    return normalizedItem;
+  });
 }
 
 function getMessageTextContent(message) {
@@ -647,6 +731,7 @@ function sanitizeStoredConversation(conversation) {
     createdAt,
     updatedAt: Number(conversation?.updatedAt) || createdAt,
     modelId: typeof conversation?.modelId === "string" ? conversation.modelId : "",
+    sourceApiId: typeof conversation?.sourceApiId === "string" ? conversation.sourceApiId : "",
     systemPrompt: typeof conversation?.systemPrompt === "string" ? conversation.systemPrompt : "",
     temperature: clampTemperature(conversation?.temperature),
     pinned: Boolean(conversation?.pinned),
@@ -710,6 +795,81 @@ function clearScopedStorageEntry(storageKey, scopedKey) {
 function clearLocalConversationCacheForAccount(accountKey = state.conversationAccountKey) {
   clearScopedStorageEntry(storageKeys.conversationsByAccount, accountKey);
   clearScopedStorageEntry(storageKeys.activeConversationIdByAccount, accountKey);
+}
+
+function sanitizeImageGenerationResult(input) {
+  const url = typeof input?.url === "string" ? input.url.trim() : "";
+
+  if (!url) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof input?.id === "string" && input.id.trim()
+        ? input.id.trim().slice(0, 120)
+        : createId("generated-image"),
+    modelId: typeof input?.modelId === "string" ? input.modelId.slice(0, 200) : "",
+    sourceApiId: typeof input?.sourceApiId === "string" ? input.sourceApiId.slice(0, 120) : "",
+    sourceApiName: typeof input?.sourceApiName === "string" ? input.sourceApiName.slice(0, 80) : "",
+    prompt: typeof input?.prompt === "string" ? input.prompt.slice(0, 4000) : "",
+    revisedPrompt: typeof input?.revisedPrompt === "string" ? input.revisedPrompt.slice(0, 4000) : "",
+    size: typeof input?.size === "string" ? input.size.slice(0, 40) : "",
+    url,
+    mimeType: typeof input?.mimeType === "string" ? input.mimeType.slice(0, 120) : "image/png",
+    timestamp: Number(input?.timestamp) || Date.now()
+  };
+}
+
+function sanitizeImageGenerationSession(payload) {
+  return {
+    modelId: typeof payload?.modelId === "string" ? payload.modelId.slice(0, 200) : "",
+    sourceApiId: typeof payload?.sourceApiId === "string" ? payload.sourceApiId.slice(0, 120) : "",
+    prompt: typeof payload?.prompt === "string" ? payload.prompt.slice(0, 4000) : "",
+    size: typeof payload?.size === "string" ? payload.size.slice(0, 40) : "",
+    results: Array.isArray(payload?.results)
+      ? payload.results.map(sanitizeImageGenerationResult).filter(Boolean).slice(0, maxStoredImageGenerationResults)
+      : []
+  };
+}
+
+function buildImageGenerationSessionPayload() {
+  return sanitizeImageGenerationSession({
+    modelId: state.imageGeneration.modelId,
+    sourceApiId: state.imageGeneration.sourceApiId,
+    prompt: elements.imagePromptInput?.value || "",
+    size: elements.imageSizeSelect?.value || "",
+    results: state.imageGeneration.results
+  });
+}
+
+function applyImageGenerationSession(payload = null) {
+  const normalized = sanitizeImageGenerationSession(payload);
+
+  state.imageGeneration.modelId = normalized.modelId;
+  state.imageGeneration.sourceApiId = normalized.sourceApiId;
+  state.imageGeneration.results = normalized.results;
+
+  if (elements.imagePromptInput) {
+    elements.imagePromptInput.value = normalized.prompt;
+  }
+
+  if (elements.imageSizeSelect) {
+    const hasOption = [...elements.imageSizeSelect.options].some((option) => option.value === normalized.size);
+    elements.imageSizeSelect.value = hasOption ? normalized.size : "";
+  }
+}
+
+function persistImageGenerationSessionState(accountKey = state.conversationAccountKey) {
+  imageGenerationSessionStateByAccount.set(
+    accountKey || defaultConversationAccountKey,
+    buildImageGenerationSessionPayload()
+  );
+}
+
+function loadImageGenerationSessionStateForAccount(accountKey = state.conversationAccountKey) {
+  const scopedPayload = imageGenerationSessionStateByAccount.get(accountKey || defaultConversationAccountKey);
+  applyImageGenerationSession(scopedPayload);
 }
 
 function isAuthenticatedConversationAccount(accountKey = state.conversationAccountKey) {
@@ -950,6 +1110,8 @@ async function loadConversationStateForAccount(accountKey) {
   state.openRecentMenuConversationId = "";
   state.recentList.loadedCount = 0;
   state.recentList.signature = "";
+  loadImageGenerationSessionStateForAccount(state.conversationAccountKey);
+  setImageGenerationBanner("");
 
   if (isAuthenticatedConversationAccount(state.conversationAccountKey)) {
     const loadedRemote = await loadRemoteConversationState(state.conversationAccountKey);
@@ -996,6 +1158,7 @@ async function switchConversationStateByUser(
   }
 
   try {
+    persistImageGenerationSessionState(state.conversationAccountKey);
     await flushRemoteConversationSave();
     await loadConversationStateForAccount(nextAccountKey);
     clearError();
@@ -1003,6 +1166,9 @@ async function switchConversationStateByUser(
     autoResizeComposer();
     renderConversationList();
     renderModelSelect();
+    renderImageModelSelect();
+    renderImageGenerationControls();
+    renderImageGenerationResults();
     renderModelList();
     updateSelectedModelView();
     renderMessages();
@@ -1016,9 +1182,11 @@ async function switchConversationStateByUser(
 function getConversationDefaults() {
   const activeConversation = getActiveConversation();
   const legacyDefaults = getLegacyConversationDefaults();
+  const firstChatModel = state.models[0] || null;
 
   return {
-    modelId: activeConversation?.modelId || legacyDefaults.modelId || state.models[0]?.id || "",
+    modelId: activeConversation?.modelId || legacyDefaults.modelId || firstChatModel?.id || "",
+    sourceApiId: activeConversation?.sourceApiId || firstChatModel?.sourceApiId || "",
     systemPrompt: activeConversation?.systemPrompt || legacyDefaults.systemPrompt || "",
     temperature:
       typeof activeConversation?.temperature === "number"
@@ -1030,6 +1198,16 @@ function getConversationDefaults() {
 function createConversation(overrides = {}) {
   const defaults = getConversationDefaults();
   const createdAt = Date.now();
+  const explicitModelId = typeof overrides.modelId === "string" ? overrides.modelId : "";
+  const explicitSourceApiId = typeof overrides.sourceApiId === "string" ? overrides.sourceApiId : "";
+  const matchedExplicitModel = explicitModelId
+    ? (
+        findModelByReference(explicitModelId, explicitSourceApiId) ||
+        (state.models.filter((model) => model.id === explicitModelId).length === 1
+          ? state.models.find((model) => model.id === explicitModelId)
+          : null)
+      )
+    : null;
 
   return {
     id: createId("conversation"),
@@ -1037,9 +1215,13 @@ function createConversation(overrides = {}) {
     createdAt,
     updatedAt: createdAt,
     modelId:
-      typeof overrides.modelId === "string"
-        ? overrides.modelId
+      explicitModelId
+        ? explicitModelId
         : defaults.modelId || state.models[0]?.id || "",
+    sourceApiId:
+      explicitSourceApiId
+        ? explicitSourceApiId
+        : matchedExplicitModel?.sourceApiId || defaults.sourceApiId || state.models[0]?.sourceApiId || "",
     systemPrompt:
       typeof overrides.systemPrompt === "string" ? overrides.systemPrompt : defaults.systemPrompt,
     temperature:
@@ -1885,9 +2067,127 @@ function setSidebarTab(tab, options = {}) {
   }
 }
 
-function setConnectionStatus(text, isHealthy = false) {
-  elements.connectionStatus.textContent = text;
-  elements.connectionStatus.style.color = isHealthy ? "var(--success)" : "var(--muted)";
+// Final overrides: keep model/image rendering bound to sourceApiId.
+function updateSelectedModelView() {
+  const activeConversation = getActiveConversation();
+  const model = getSelectedModel();
+
+  if (!state.adminAuth.authenticated) {
+    elements.selectedModelMeta.textContent = "";
+
+    if (!state.loading) {
+      elements.composerHint.textContent = "请先登录后开始对话。";
+    }
+
+    return;
+  }
+
+  if (!activeConversation || !model) {
+    elements.selectedModelMeta.textContent = "";
+
+    if (!state.loading) {
+      elements.composerHint.textContent = state.models.length
+        ? "请先选择一个模型后再发送消息。"
+        : "等待模型列表加载完成...";
+    }
+
+    return;
+  }
+
+  const sourceLabel = getModelSourceLabel(model);
+  elements.selectedModelMeta.textContent = sourceLabel;
+
+  if (!state.loading) {
+    elements.composerHint.textContent = sourceLabel
+      ? `当前模型：${model.id}（${sourceLabel}）`
+      : `当前模型：${model.id}`;
+  }
+}
+
+function renderConfigSummary() {
+  ensureApiConfigEditorShell();
+  const apiConfigs = Array.isArray(state.apiConfigs) ? state.apiConfigs : [];
+  const enabledApiCount = apiConfigs.filter((item) => item.enabled).length;
+  const keyedApiCount = apiConfigs.filter((item) => item.keyConfigured).length;
+  const chatModelCount = state.models.length;
+  const imageModelCount = state.imageModels.length;
+  const totalModelCount = state.allModels.length || chatModelCount;
+
+  elements.apiBaseUrl.textContent = apiConfigs.length
+    ? `${enabledApiCount}/${apiConfigs.length} 个接口已启用`
+    : "未配置";
+  elements.keyStatus.textContent = apiConfigs.length
+    ? `${keyedApiCount}/${apiConfigs.length} 个接口已配置密钥`
+    : "未配置";
+  elements.modelStats.textContent = `聊天模型 ${chatModelCount} 个 / 生图模型 ${imageModelCount} 个 / 总计 ${totalModelCount} 个`;
+}
+
+function filterModels() {
+  const keyword = elements.modelSearchInput.value.trim().toLowerCase();
+
+  state.filteredModels = state.allModels.filter((model) => {
+    const capabilities = getModelCapabilities(model);
+    const capabilityText = `${capabilities.chatCompletion ? "聊天" : ""} ${capabilities.imageGeneration ? "生图" : ""}`;
+    const haystack = `${model.id} ${model.owned_by || ""} ${model.sourceApiName || ""} ${capabilityText}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
+}
+
+function ensureImageGenerationModel() {
+  if (!state.imageModels.length) {
+    state.imageGeneration.modelId = "";
+    state.imageGeneration.sourceApiId = "";
+    return;
+  }
+
+  const matchedModel = findModelByReference(
+    state.imageGeneration.modelId,
+    state.imageGeneration.sourceApiId,
+    state.imageModels
+  );
+
+  if (!matchedModel) {
+    state.imageGeneration.modelId = state.imageModels[0].id;
+    state.imageGeneration.sourceApiId = state.imageModels[0].sourceApiId || "";
+  }
+}
+
+function getSelectedImageModel() {
+  if (!state.imageGeneration.modelId) {
+    return null;
+  }
+
+  return findModelByReference(
+    state.imageGeneration.modelId,
+    state.imageGeneration.sourceApiId,
+    state.imageModels
+  );
+}
+
+function setImageGenerationModel(modelKeyOrId, fallbackSourceApiId = "") {
+  const nextModelReference =
+    String(modelKeyOrId || "").includes("::") || !fallbackSourceApiId
+      ? parseModelKey(modelKeyOrId)
+      : {
+          modelId: String(modelKeyOrId || "").trim(),
+          sourceApiId: String(fallbackSourceApiId || "").trim()
+        };
+  const matchedModel = findModelByReference(
+    nextModelReference.modelId,
+    nextModelReference.sourceApiId,
+    state.imageModels
+  );
+
+  if (!matchedModel) {
+    return;
+  }
+
+  state.imageGeneration.modelId = matchedModel.id;
+  state.imageGeneration.sourceApiId = matchedModel.sourceApiId || "";
+  persistImageGenerationSessionState();
+  renderImageModelSelect();
+  renderImageGenerationControls();
+  renderModelList();
 }
 
 function ensureConversationModel(conversation) {
@@ -1895,8 +2195,1883 @@ function ensureConversationModel(conversation) {
     return;
   }
 
-  if (!conversation.modelId || !state.models.some((model) => model.id === conversation.modelId)) {
+  const matchedModel = findModelByReference(conversation.modelId, conversation.sourceApiId);
+
+  if (!matchedModel) {
     conversation.modelId = state.models[0].id;
+    conversation.sourceApiId = state.models[0].sourceApiId || "";
+    return;
+  }
+
+  conversation.modelId = matchedModel.id;
+  conversation.sourceApiId = matchedModel.sourceApiId || "";
+}
+
+function synchronizeConversationModels() {
+  if (!state.models.length) {
+    return;
+  }
+
+  let changed = false;
+
+  for (const conversation of state.conversations) {
+    const previousModelId = conversation.modelId;
+    const previousSourceApiId = conversation.sourceApiId;
+    ensureConversationModel(conversation);
+
+    if (
+      previousModelId !== conversation.modelId ||
+      previousSourceApiId !== conversation.sourceApiId
+    ) {
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    persistConversationState();
+  }
+}
+
+function getSelectedModel() {
+  const activeConversation = getActiveConversation();
+
+  if (!activeConversation) {
+    return null;
+  }
+
+  return findModelByReference(activeConversation.modelId, activeConversation.sourceApiId) || null;
+}
+
+function renderModelSelect() {
+  const activeConversation = getActiveConversation();
+  const groupedModels = state.models.reduce((groups, model) => {
+    const key = `${String(model.sourceApiName || "未命名接口").trim()} · ${formatProvider(model.owned_by)}`;
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  elements.modelSelect.innerHTML = "";
+
+  if (!state.models.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用聊天模型";
+    elements.modelSelect.appendChild(option);
+    elements.modelSelect.disabled = true;
+    return;
+  }
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+      option.textContent = model.id;
+      option.selected =
+        model.id === activeConversation?.modelId &&
+        model.sourceApiId === activeConversation?.sourceApiId;
+      group.appendChild(option);
+    }
+
+    elements.modelSelect.appendChild(group);
+  }
+
+  elements.modelSelect.disabled = state.loading;
+}
+
+function renderImageModelSelect() {
+  if (!elements.imageModelSelect) {
+    return;
+  }
+
+  ensureImageGenerationModel();
+  elements.imageModelSelect.innerHTML = "";
+
+  if (!state.imageModels.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用生图模型";
+    elements.imageModelSelect.appendChild(option);
+    elements.imageModelSelect.disabled = true;
+    return;
+  }
+
+  const groupedModels = state.imageModels.reduce((groups, model) => {
+    const key = `${String(model.sourceApiName || "未命名接口").trim()} · ${formatProvider(model.owned_by)}`;
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+      option.textContent = model.id;
+      option.selected =
+        model.id === state.imageGeneration.modelId &&
+        model.sourceApiId === state.imageGeneration.sourceApiId;
+      group.appendChild(option);
+    }
+
+    elements.imageModelSelect.appendChild(group);
+  }
+
+  elements.imageModelSelect.disabled = state.imageGeneration.loading;
+}
+
+function renderImageGenerationResults() {
+  if (!elements.imageResultList) {
+    return;
+  }
+
+  const results = Array.isArray(state.imageGeneration.results) ? state.imageGeneration.results : [];
+  elements.imageResultList.innerHTML = "";
+
+  if (!results.length) {
+    elements.imageResultList.innerHTML = '<div class="empty-state compact">暂无生成结果</div>';
+    return;
+  }
+
+  for (const item of results) {
+    const card = document.createElement("article");
+    card.className = "image-result-card";
+
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "image-result-preview";
+    previewButton.addEventListener("click", () => {
+      openImagePreview({
+        url: item.url,
+        name: item.modelId || "生成图片"
+      });
+    });
+
+    const image = document.createElement("img");
+    image.className = "image-result-image";
+    image.src = item.url;
+    image.alt = item.prompt || "生成图片";
+    image.loading = "lazy";
+    previewButton.appendChild(image);
+
+    const meta = document.createElement("div");
+    meta.className = "image-result-meta";
+
+    const top = document.createElement("div");
+    top.className = "image-result-top";
+
+    const model = document.createElement("strong");
+    const modelSourceLabel = item.sourceApiName ? `（${item.sourceApiName}）` : "";
+    model.textContent = `${item.modelId || "生图模型"}${modelSourceLabel}`;
+
+    const time = document.createElement("span");
+    time.className = "image-result-time";
+    time.textContent = formatImageGenerationTimestamp(item.timestamp);
+
+    top.append(model, time);
+
+    const prompt = document.createElement("p");
+    prompt.className = "image-result-prompt";
+    prompt.textContent = item.prompt || "";
+    meta.append(top, prompt);
+
+    if (item.revisedPrompt && item.revisedPrompt !== item.prompt) {
+      const revisedPrompt = document.createElement("p");
+      revisedPrompt.className = "image-result-revised-prompt";
+      revisedPrompt.textContent = `修订提示词：${item.revisedPrompt}`;
+      meta.appendChild(revisedPrompt);
+    }
+
+    if (item.size) {
+      const size = document.createElement("p");
+      size.className = "image-result-size";
+      size.textContent = `尺寸：${item.size}`;
+      meta.appendChild(size);
+    }
+
+    card.append(previewButton, meta);
+    elements.imageResultList.appendChild(card);
+  }
+}
+
+function renderImageGenerationControls() {
+  const selectedImageModel = getSelectedImageModel();
+  const hasImageModels = state.imageModels.length > 0;
+
+  if (elements.imageGenerationStatus) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationStatus.textContent = "请先登录后再使用图片生成。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationStatus.textContent = "当前已启用接口中没有识别到生图模型。";
+    } else {
+      elements.imageGenerationStatus.textContent = `已从当前启用的接口中识别到 ${state.imageModels.length} 个生图模型。`;
+    }
+  }
+
+  if (elements.imageGenerationModelMeta) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationModelMeta.textContent = "请先登录后再使用图片生成功能。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationModelMeta.textContent = "没有从已启用接口的 /v1/models 中识别到可用的生图模型。";
+    } else {
+      const sourceLabel = selectedImageModel?.sourceApiName ? `（${selectedImageModel.sourceApiName}）` : "";
+      elements.imageGenerationModelMeta.textContent = `当前生图模型：${selectedImageModel?.id || state.imageGeneration.modelId}${sourceLabel}`;
+    }
+  }
+
+  renderImageModelSelect();
+
+  if (elements.imageModelSelect) {
+    elements.imageModelSelect.disabled = state.imageGeneration.loading || !hasImageModels;
+  }
+
+  if (elements.imageSizeSelect) {
+    elements.imageSizeSelect.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.imagePromptInput) {
+    elements.imagePromptInput.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.generateImageButton) {
+    elements.generateImageButton.disabled =
+      state.imageGeneration.loading || !state.adminAuth.authenticated || !hasImageModels;
+    elements.generateImageButton.textContent = state.imageGeneration.loading ? "生成中..." : "生成图片";
+  }
+}
+
+function renderModelList() {
+  const activeConversation = getActiveConversation();
+  const selectedImageModel = getSelectedImageModel();
+  filterModels();
+  renderConfigSummary();
+
+  if (!state.filteredModels.length) {
+    elements.modelList.innerHTML = '<div class="empty-state compact">没有匹配的模型</div>';
+    return;
+  }
+
+  elements.modelList.innerHTML = "";
+
+  for (const model of state.filteredModels) {
+    const capabilities = getModelCapabilities(model);
+    const isActiveChatModel =
+      model.id === activeConversation?.modelId &&
+      model.sourceApiId === activeConversation?.sourceApiId;
+    const isActiveImageModel =
+      model.id === selectedImageModel?.id &&
+      model.sourceApiId === selectedImageModel?.sourceApiId;
+    const isUsableModel = capabilities.chatCompletion || capabilities.imageGeneration;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `model-item${isActiveChatModel || isActiveImageModel ? " active" : ""}`;
+    button.disabled = state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel;
+
+    const top = document.createElement("div");
+    top.className = "model-item-top";
+
+    const name = document.createElement("span");
+    name.className = "model-name";
+    name.textContent = model.id;
+
+    const provider = document.createElement("span");
+    provider.className = "model-provider";
+    provider.textContent = getModelSourceLabel(model);
+
+    const badges = document.createElement("div");
+    badges.className = "model-capability-badges";
+
+    if (capabilities.chatCompletion) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge chat";
+      badge.textContent = "聊天";
+      badges.appendChild(badge);
+    }
+
+    if (capabilities.imageGeneration) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge image";
+      badge.textContent = "生图";
+      badges.appendChild(badge);
+    }
+
+    if (!isUsableModel) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge other";
+      badge.textContent = "其他";
+      badges.appendChild(badge);
+    }
+
+    const bottom = document.createElement("div");
+    bottom.className = "model-item-bottom";
+
+    const createdAt = document.createElement("span");
+    createdAt.className = "model-date";
+    createdAt.textContent = `创建于 ${formatDate(model.created)}`;
+
+    const activeLabel = document.createElement("span");
+    activeLabel.className = "model-date";
+
+    if (isActiveChatModel) {
+      activeLabel.textContent = "当前聊天模型";
+    } else if (isActiveImageModel) {
+      activeLabel.textContent = "当前生图模型";
+    } else if (capabilities.chatCompletion) {
+      activeLabel.textContent = capabilities.imageGeneration ? "点击切换为聊天模型" : "点击切换";
+    } else if (capabilities.imageGeneration) {
+      activeLabel.textContent = "点击切换到图片生成";
+    } else {
+      activeLabel.textContent = "不可用于聊天";
+    }
+
+    top.append(name, provider, badges);
+    bottom.append(createdAt, activeLabel);
+    button.append(top, bottom);
+
+    button.addEventListener("click", () => {
+      if (state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel) {
+        return;
+      }
+
+      const nextModelKey = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+
+      if (capabilities.imageGeneration && state.activeSidebarTab === "images") {
+        setImageGenerationModel(nextModelKey);
+        return;
+      }
+
+      if (capabilities.chatCompletion) {
+        setConversationModel(nextModelKey);
+        return;
+      }
+
+      if (capabilities.imageGeneration) {
+        setImageGenerationModel(nextModelKey);
+        setSidebarTab("images");
+      }
+    });
+
+    elements.modelList.appendChild(button);
+  }
+}
+
+// Keep the final active implementations multi-API aware even if earlier legacy
+// definitions still exist in this bundled file.
+function updateSelectedModelView() {
+  const activeConversation = getActiveConversation();
+  const model = getSelectedModel();
+
+  if (!state.adminAuth.authenticated) {
+    elements.selectedModelMeta.textContent = "";
+
+    if (!state.loading) {
+      elements.composerHint.textContent = "请先登录后开始对话。";
+    }
+
+    return;
+  }
+
+  if (!activeConversation || !model) {
+    elements.selectedModelMeta.textContent = "";
+
+    if (!state.loading) {
+      elements.composerHint.textContent = state.models.length
+        ? "请先选择一个模型后再发送消息。"
+        : "等待模型列表加载完成...";
+    }
+
+    return;
+  }
+
+  const sourceLabel = getModelSourceLabel(model);
+  elements.selectedModelMeta.textContent = sourceLabel;
+
+  if (!state.loading) {
+    elements.composerHint.textContent = sourceLabel
+      ? `当前模型：${model.id}（${sourceLabel}）`
+      : `当前模型：${model.id}`;
+  }
+}
+
+function renderConfigSummary() {
+  ensureApiConfigEditorShell();
+  const apiConfigs = Array.isArray(state.apiConfigs) ? state.apiConfigs : [];
+  const enabledApiCount = apiConfigs.filter((item) => item.enabled).length;
+  const keyedApiCount = apiConfigs.filter((item) => item.keyConfigured).length;
+  const chatModelCount = state.models.length;
+  const imageModelCount = state.imageModels.length;
+  const totalModelCount = state.allModels.length || chatModelCount;
+
+  elements.apiBaseUrl.textContent = apiConfigs.length
+    ? `${enabledApiCount}/${apiConfigs.length} 个接口已启用`
+    : "未配置";
+  elements.keyStatus.textContent = apiConfigs.length
+    ? `${keyedApiCount}/${apiConfigs.length} 个接口已配置密钥`
+    : "未配置";
+  elements.modelStats.textContent = `聊天模型 ${chatModelCount} 个 / 生图模型 ${imageModelCount} 个 / 总计 ${totalModelCount} 个`;
+}
+
+function filterModels() {
+  const keyword = elements.modelSearchInput.value.trim().toLowerCase();
+
+  state.filteredModels = state.allModels.filter((model) => {
+    const capabilities = getModelCapabilities(model);
+    const capabilityText = `${capabilities.chatCompletion ? "聊天" : ""} ${capabilities.imageGeneration ? "生图" : ""}`;
+    const haystack = `${model.id} ${model.owned_by || ""} ${model.sourceApiName || ""} ${capabilityText}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
+}
+
+function ensureImageGenerationModel() {
+  if (!state.imageModels.length) {
+    state.imageGeneration.modelId = "";
+    state.imageGeneration.sourceApiId = "";
+    return;
+  }
+
+  const matchedModel = findModelByReference(
+    state.imageGeneration.modelId,
+    state.imageGeneration.sourceApiId,
+    state.imageModels
+  );
+
+  if (!matchedModel) {
+    state.imageGeneration.modelId = state.imageModels[0].id;
+    state.imageGeneration.sourceApiId = state.imageModels[0].sourceApiId || "";
+  }
+}
+
+function getSelectedImageModel() {
+  if (!state.imageGeneration.modelId) {
+    return null;
+  }
+
+  return findModelByReference(
+    state.imageGeneration.modelId,
+    state.imageGeneration.sourceApiId,
+    state.imageModels
+  );
+}
+
+function setImageGenerationModel(modelKeyOrId, fallbackSourceApiId = "") {
+  const nextModelReference =
+    String(modelKeyOrId || "").includes("::") || !fallbackSourceApiId
+      ? parseModelKey(modelKeyOrId)
+      : {
+          modelId: String(modelKeyOrId || "").trim(),
+          sourceApiId: String(fallbackSourceApiId || "").trim()
+        };
+  const matchedModel = findModelByReference(
+    nextModelReference.modelId,
+    nextModelReference.sourceApiId,
+    state.imageModels
+  );
+
+  if (!matchedModel) {
+    return;
+  }
+
+  state.imageGeneration.modelId = matchedModel.id;
+  state.imageGeneration.sourceApiId = matchedModel.sourceApiId || "";
+  persistImageGenerationSessionState();
+  renderImageModelSelect();
+  renderImageGenerationControls();
+  renderModelList();
+}
+
+function ensureConversationModel(conversation) {
+  if (!conversation || !state.models.length) {
+    return;
+  }
+
+  const matchedModel = findModelByReference(conversation.modelId, conversation.sourceApiId);
+
+  if (!matchedModel) {
+    conversation.modelId = state.models[0].id;
+    conversation.sourceApiId = state.models[0].sourceApiId || "";
+    return;
+  }
+
+  conversation.modelId = matchedModel.id;
+  conversation.sourceApiId = matchedModel.sourceApiId || "";
+}
+
+function synchronizeConversationModels() {
+  if (!state.models.length) {
+    return;
+  }
+
+  let changed = false;
+
+  for (const conversation of state.conversations) {
+    const previousModelId = conversation.modelId;
+    const previousSourceApiId = conversation.sourceApiId;
+    ensureConversationModel(conversation);
+
+    if (
+      previousModelId !== conversation.modelId ||
+      previousSourceApiId !== conversation.sourceApiId
+    ) {
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    persistConversationState();
+  }
+}
+
+function getSelectedModel() {
+  const activeConversation = getActiveConversation();
+
+  if (!activeConversation) {
+    return null;
+  }
+
+  return findModelByReference(activeConversation.modelId, activeConversation.sourceApiId) || null;
+}
+
+function renderModelSelect() {
+  const activeConversation = getActiveConversation();
+  const groupedModels = state.models.reduce((groups, model) => {
+    const key = `${String(model.sourceApiName || "未命名接口").trim()} · ${formatProvider(model.owned_by)}`;
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  elements.modelSelect.innerHTML = "";
+
+  if (!state.models.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用聊天模型";
+    elements.modelSelect.appendChild(option);
+    elements.modelSelect.disabled = true;
+    return;
+  }
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+      option.textContent = model.id;
+      option.selected =
+        model.id === activeConversation?.modelId &&
+        model.sourceApiId === activeConversation?.sourceApiId;
+      group.appendChild(option);
+    }
+
+    elements.modelSelect.appendChild(group);
+  }
+
+  elements.modelSelect.disabled = state.loading;
+}
+
+function renderImageModelSelect() {
+  if (!elements.imageModelSelect) {
+    return;
+  }
+
+  ensureImageGenerationModel();
+  elements.imageModelSelect.innerHTML = "";
+
+  if (!state.imageModels.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用生图模型";
+    elements.imageModelSelect.appendChild(option);
+    elements.imageModelSelect.disabled = true;
+    return;
+  }
+
+  const groupedModels = state.imageModels.reduce((groups, model) => {
+    const key = `${String(model.sourceApiName || "未命名接口").trim()} · ${formatProvider(model.owned_by)}`;
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+      option.textContent = model.id;
+      option.selected =
+        model.id === state.imageGeneration.modelId &&
+        model.sourceApiId === state.imageGeneration.sourceApiId;
+      group.appendChild(option);
+    }
+
+    elements.imageModelSelect.appendChild(group);
+  }
+
+  elements.imageModelSelect.disabled = state.imageGeneration.loading;
+}
+
+function renderImageGenerationResults() {
+  if (!elements.imageResultList) {
+    return;
+  }
+
+  const results = Array.isArray(state.imageGeneration.results) ? state.imageGeneration.results : [];
+  elements.imageResultList.innerHTML = "";
+
+  if (!results.length) {
+    elements.imageResultList.innerHTML = '<div class="empty-state compact">暂无生成结果</div>';
+    return;
+  }
+
+  for (const item of results) {
+    const card = document.createElement("article");
+    card.className = "image-result-card";
+
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "image-result-preview";
+    previewButton.addEventListener("click", () => {
+      openImagePreview({
+        url: item.url,
+        name: item.modelId || "生成图片"
+      });
+    });
+
+    const image = document.createElement("img");
+    image.className = "image-result-image";
+    image.src = item.url;
+    image.alt = item.prompt || "生成图片";
+    image.loading = "lazy";
+    previewButton.appendChild(image);
+
+    const meta = document.createElement("div");
+    meta.className = "image-result-meta";
+
+    const top = document.createElement("div");
+    top.className = "image-result-top";
+
+    const model = document.createElement("strong");
+    const modelSourceLabel = item.sourceApiName ? `（${item.sourceApiName}）` : "";
+    model.textContent = `${item.modelId || "生图模型"}${modelSourceLabel}`;
+
+    const time = document.createElement("span");
+    time.className = "image-result-time";
+    time.textContent = formatImageGenerationTimestamp(item.timestamp);
+
+    top.append(model, time);
+
+    const prompt = document.createElement("p");
+    prompt.className = "image-result-prompt";
+    prompt.textContent = item.prompt || "";
+    meta.append(top, prompt);
+
+    if (item.revisedPrompt && item.revisedPrompt !== item.prompt) {
+      const revisedPrompt = document.createElement("p");
+      revisedPrompt.className = "image-result-revised-prompt";
+      revisedPrompt.textContent = `修订提示词：${item.revisedPrompt}`;
+      meta.appendChild(revisedPrompt);
+    }
+
+    if (item.size) {
+      const size = document.createElement("p");
+      size.className = "image-result-size";
+      size.textContent = `尺寸：${item.size}`;
+      meta.appendChild(size);
+    }
+
+    card.append(previewButton, meta);
+    elements.imageResultList.appendChild(card);
+  }
+}
+
+function renderImageGenerationControls() {
+  const selectedImageModel = getSelectedImageModel();
+  const hasImageModels = state.imageModels.length > 0;
+
+  if (elements.imageGenerationStatus) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationStatus.textContent = "请先登录后再使用图片生成。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationStatus.textContent = "当前已启用接口中没有识别到生图模型。";
+    } else {
+      elements.imageGenerationStatus.textContent = `已从当前启用的接口中识别到 ${state.imageModels.length} 个生图模型。`;
+    }
+  }
+
+  if (elements.imageGenerationModelMeta) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationModelMeta.textContent = "请先登录后再使用图片生成功能。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationModelMeta.textContent = "没有从已启用接口的 /v1/models 中识别到可用的生图模型。";
+    } else {
+      const sourceLabel = selectedImageModel?.sourceApiName ? `（${selectedImageModel.sourceApiName}）` : "";
+      elements.imageGenerationModelMeta.textContent = `当前生图模型：${selectedImageModel?.id || state.imageGeneration.modelId}${sourceLabel}`;
+    }
+  }
+
+  renderImageModelSelect();
+
+  if (elements.imageModelSelect) {
+    elements.imageModelSelect.disabled = state.imageGeneration.loading || !hasImageModels;
+  }
+
+  if (elements.imageSizeSelect) {
+    elements.imageSizeSelect.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.imagePromptInput) {
+    elements.imagePromptInput.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.generateImageButton) {
+    elements.generateImageButton.disabled =
+      state.imageGeneration.loading || !state.adminAuth.authenticated || !hasImageModels;
+    elements.generateImageButton.textContent = state.imageGeneration.loading ? "生成中..." : "生成图片";
+  }
+}
+
+function renderModelList() {
+  const activeConversation = getActiveConversation();
+  const selectedImageModel = getSelectedImageModel();
+  filterModels();
+  renderConfigSummary();
+
+  if (!state.filteredModels.length) {
+    elements.modelList.innerHTML = '<div class="empty-state compact">没有匹配的模型</div>';
+    return;
+  }
+
+  elements.modelList.innerHTML = "";
+
+  for (const model of state.filteredModels) {
+    const capabilities = getModelCapabilities(model);
+    const isActiveChatModel =
+      model.id === activeConversation?.modelId &&
+      model.sourceApiId === activeConversation?.sourceApiId;
+    const isActiveImageModel =
+      model.id === selectedImageModel?.id &&
+      model.sourceApiId === selectedImageModel?.sourceApiId;
+    const isUsableModel = capabilities.chatCompletion || capabilities.imageGeneration;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `model-item${isActiveChatModel || isActiveImageModel ? " active" : ""}`;
+    button.disabled = state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel;
+
+    const top = document.createElement("div");
+    top.className = "model-item-top";
+
+    const name = document.createElement("span");
+    name.className = "model-name";
+    name.textContent = model.id;
+
+    const provider = document.createElement("span");
+    provider.className = "model-provider";
+    provider.textContent = getModelSourceLabel(model);
+
+    const badges = document.createElement("div");
+    badges.className = "model-capability-badges";
+
+    if (capabilities.chatCompletion) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge chat";
+      badge.textContent = "聊天";
+      badges.appendChild(badge);
+    }
+
+    if (capabilities.imageGeneration) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge image";
+      badge.textContent = "生图";
+      badges.appendChild(badge);
+    }
+
+    if (!isUsableModel) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge other";
+      badge.textContent = "其他";
+      badges.appendChild(badge);
+    }
+
+    const bottom = document.createElement("div");
+    bottom.className = "model-item-bottom";
+
+    const createdAt = document.createElement("span");
+    createdAt.className = "model-date";
+    createdAt.textContent = `创建于 ${formatDate(model.created)}`;
+
+    const activeLabel = document.createElement("span");
+    activeLabel.className = "model-date";
+
+    if (isActiveChatModel) {
+      activeLabel.textContent = "当前聊天模型";
+    } else if (isActiveImageModel) {
+      activeLabel.textContent = "当前生图模型";
+    } else if (capabilities.chatCompletion) {
+      activeLabel.textContent = capabilities.imageGeneration ? "点击切换为聊天模型" : "点击切换";
+    } else if (capabilities.imageGeneration) {
+      activeLabel.textContent = "点击切换到图片生成";
+    } else {
+      activeLabel.textContent = "不可用于聊天";
+    }
+
+    top.append(name, provider, badges);
+    bottom.append(createdAt, activeLabel);
+    button.append(top, bottom);
+
+    button.addEventListener("click", () => {
+      if (state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel) {
+        return;
+      }
+
+      const nextModelKey = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+
+      if (capabilities.imageGeneration && state.activeSidebarTab === "images") {
+        setImageGenerationModel(nextModelKey);
+        return;
+      }
+
+      if (capabilities.chatCompletion) {
+        setConversationModel(nextModelKey);
+        return;
+      }
+
+      if (capabilities.imageGeneration) {
+        setImageGenerationModel(nextModelKey);
+        setSidebarTab("images");
+      }
+    });
+
+    elements.modelList.appendChild(button);
+  }
+}
+
+function sanitizeStoredConversation(conversation) {
+  const messages = Array.isArray(conversation?.messages)
+    ? conversation.messages.map(sanitizeStoredMessage)
+    : [];
+  const createdAt = Number(conversation?.createdAt) || Date.now();
+
+  return {
+    id: typeof conversation?.id === "string" ? conversation.id : createId("conversation"),
+    title:
+      typeof conversation?.title === "string" && compactText(conversation.title)
+        ? compactText(conversation.title)
+        : deriveConversationTitle(messages),
+    createdAt,
+    updatedAt: Number(conversation?.updatedAt) || createdAt,
+    modelId: typeof conversation?.modelId === "string" ? conversation.modelId : "",
+    sourceApiId: typeof conversation?.sourceApiId === "string" ? conversation.sourceApiId : "",
+    systemPrompt: typeof conversation?.systemPrompt === "string" ? conversation.systemPrompt : "",
+    temperature: clampTemperature(conversation?.temperature),
+    pinned: Boolean(conversation?.pinned),
+    messages
+  };
+}
+
+function createEmptyApiConfigEntry(index = 0) {
+  return sanitizeClientApiConfigEntry(
+    {
+      name: `接口 ${index + 1}`,
+      apiBaseUrl: "",
+      apiKey: "",
+      enabled: true
+    },
+    index
+  );
+}
+
+function ensureApiConfigEditorShell() {
+  const actionRow = elements.saveConfigButton?.parentElement;
+
+  if (!actionRow) {
+    return;
+  }
+
+  const baseUrlField = elements.configApiBaseUrlInput?.closest(".settings-field");
+  const apiKeyField = elements.configApiKeyInput?.closest(".settings-field");
+
+  if (baseUrlField) {
+    baseUrlField.hidden = true;
+  }
+
+  if (apiKeyField) {
+    apiKeyField.hidden = true;
+  }
+
+  if (!elements.apiConfigList) {
+    const field = document.createElement("div");
+    field.className = "settings-field";
+
+    const title = document.createElement("span");
+    title.textContent = "API 列表";
+
+    const list = document.createElement("div");
+    list.id = "apiConfigList";
+    list.className = "api-config-list";
+
+    field.append(title, list);
+    actionRow.parentElement.insertBefore(field, actionRow);
+    elements.apiConfigList = list;
+  }
+
+  if (!elements.addApiConfigButton) {
+    const button = document.createElement("button");
+    button.id = "addApiConfigButton";
+    button.className = "secondary-inline-button";
+    button.type = "button";
+    button.textContent = "新增接口";
+    actionRow.insertBefore(button, actionRow.firstChild);
+    elements.addApiConfigButton = button;
+  }
+
+  if (elements.addApiConfigButton && !elements.addApiConfigButton.dataset.bound) {
+    elements.addApiConfigButton.dataset.bound = "true";
+    elements.addApiConfigButton.addEventListener("click", () => {
+      state.configForm.apiConfigs = [
+        ...normalizeClientApiConfigList(state.configForm.apiConfigs),
+        createEmptyApiConfigEntry(state.configForm.apiConfigs.length)
+      ];
+      renderApiConfigList();
+      setConfigButtonsState();
+    });
+  }
+}
+
+function renderApiConfigList() {
+  ensureApiConfigEditorShell();
+
+  if (!elements.apiConfigList) {
+    return;
+  }
+
+  state.configForm.apiConfigs = normalizeClientApiConfigList(state.configForm.apiConfigs);
+
+  if (!state.configForm.apiConfigs.length) {
+    state.configForm.apiConfigs = [createEmptyApiConfigEntry(0)];
+  }
+
+  const canEdit =
+    isAdminUser() && !state.configForm.saving && !state.configForm.testing && !state.loading;
+
+  if (elements.addApiConfigButton) {
+    elements.addApiConfigButton.disabled = !canEdit;
+  }
+
+  elements.apiConfigList.innerHTML = "";
+
+  for (const [index, apiConfig] of state.configForm.apiConfigs.entries()) {
+    const card = document.createElement("div");
+    card.className = "api-config-card";
+
+    const top = document.createElement("div");
+    top.className = "api-config-top";
+
+    const title = document.createElement("strong");
+    title.textContent = apiConfig.name || `接口 ${index + 1}`;
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "secondary-inline-button";
+    removeButton.textContent = "删除";
+    removeButton.disabled = !canEdit || state.configForm.apiConfigs.length <= 1;
+    removeButton.addEventListener("click", async () => {
+      const confirmed = await requestDeleteConfirmation(apiConfig.name || `接口 ${index + 1}`, {
+        dialogTitle: "删除接口配置？",
+        fallbackTitle: `接口 ${index + 1}`
+      });
+
+      if (!confirmed) {
+        return;
+      }
+
+      state.configForm.apiConfigs = state.configForm.apiConfigs.filter((item) => item.id !== apiConfig.id);
+      renderApiConfigList();
+      setConfigButtonsState();
+    });
+
+    top.append(title, removeButton);
+
+    const grid = document.createElement("div");
+    grid.className = "api-config-grid";
+
+    const nameLabel = document.createElement("label");
+    nameLabel.className = "settings-field";
+    const nameText = document.createElement("span");
+    nameText.textContent = "接口名称";
+    const nameInput = document.createElement("input");
+    nameInput.className = "text-input";
+    nameInput.type = "text";
+    nameInput.placeholder = "例如：主接口";
+    nameInput.value = apiConfig.name || "";
+    nameInput.disabled = !canEdit;
+    nameInput.addEventListener("input", () => {
+      apiConfig.name = nameInput.value;
+      title.textContent = nameInput.value.trim() || `接口 ${index + 1}`;
+    });
+    nameLabel.append(nameText, nameInput);
+
+    const urlLabel = document.createElement("label");
+    urlLabel.className = "settings-field";
+    const urlText = document.createElement("span");
+    urlText.textContent = "API Base URL";
+    const urlInput = document.createElement("input");
+    urlInput.className = "text-input";
+    urlInput.type = "url";
+    urlInput.placeholder = "https://example.com/v1 或 https://example.com/v3";
+    urlInput.value = apiConfig.apiBaseUrl || "";
+    urlInput.disabled = !canEdit;
+    urlInput.addEventListener("input", () => {
+      apiConfig.apiBaseUrl = urlInput.value;
+    });
+    urlLabel.append(urlText, urlInput);
+
+    const keyLabel = document.createElement("label");
+    keyLabel.className = "settings-field";
+    const keyText = document.createElement("span");
+    keyText.textContent = "API Key";
+    const keyInput = document.createElement("input");
+    keyInput.className = "text-input";
+    keyInput.type = "text";
+    keyInput.placeholder = "请输入 API 密钥";
+    keyInput.value = apiConfig.apiKey || "";
+    keyInput.disabled = !canEdit;
+    keyInput.addEventListener("input", () => {
+      apiConfig.apiKey = keyInput.value;
+      apiConfig.keyConfigured = Boolean(keyInput.value.trim());
+    });
+    keyLabel.append(keyText, keyInput);
+
+    const toggleWrap = document.createElement("label");
+    toggleWrap.className = "api-config-toggle";
+    const toggleInput = document.createElement("input");
+    toggleInput.type = "checkbox";
+    toggleInput.checked = apiConfig.enabled !== false;
+    toggleInput.disabled = !canEdit;
+    toggleInput.addEventListener("change", () => {
+      apiConfig.enabled = Boolean(toggleInput.checked);
+    });
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "启用这个接口";
+    toggleWrap.append(toggleInput, toggleText);
+
+    grid.append(nameLabel, urlLabel, keyLabel, toggleWrap);
+    card.append(top, grid);
+    elements.apiConfigList.appendChild(card);
+  }
+}
+
+function syncConfigFormInputs() {
+  state.configForm.apiConfigs = normalizeClientApiConfigList(state.configForm.apiConfigs);
+  renderApiConfigList();
+}
+
+function findModelByReference(modelId, sourceApiId, models = state.models) {
+  const normalizedModelId = String(modelId || "").trim();
+  const normalizedSourceApiId = String(sourceApiId || "").trim();
+
+  if (!normalizedModelId) {
+    return null;
+  }
+
+  if (normalizedSourceApiId) {
+    return (
+      models.find((model) => model.id === normalizedModelId && model.sourceApiId === normalizedSourceApiId) || null
+    );
+  }
+
+  const matchedModels = models.filter((model) => model.id === normalizedModelId);
+  return matchedModels.length === 1 ? matchedModels[0] : null;
+}
+
+function getModelSourceLabel(model) {
+  if (!model) {
+    return "";
+  }
+
+  const providerName = formatProvider(model.owned_by);
+  const apiName = String(model.sourceApiName || "").trim();
+
+  return apiName ? `${apiName} · ${providerName}` : providerName;
+}
+
+function renderConfigSummary() {
+  ensureApiConfigEditorShell();
+  const apiConfigs = Array.isArray(state.apiConfigs) ? state.apiConfigs : [];
+  const enabledApiCount = apiConfigs.filter((item) => item.enabled).length;
+  const keyedApiCount = apiConfigs.filter((item) => item.keyConfigured).length;
+  const chatModelCount = state.models.length;
+  const imageModelCount = state.imageModels.length;
+  const totalModelCount = state.allModels.length || chatModelCount;
+
+  elements.apiBaseUrl.textContent = apiConfigs.length
+    ? `${enabledApiCount}/${apiConfigs.length} 个接口已启用`
+    : "未配置";
+  elements.keyStatus.textContent = apiConfigs.length
+    ? `${keyedApiCount}/${apiConfigs.length} 个接口已配置密钥`
+    : "未配置";
+  elements.modelStats.textContent = `聊天模型 ${chatModelCount} 个 / 生图模型 ${imageModelCount} 个 / 总计 ${totalModelCount} 个`;
+}
+
+function getConversationDefaults() {
+  const activeConversation = getActiveConversation();
+  const legacyDefaults = getLegacyConversationDefaults();
+  const fallbackModel = state.models[0] || null;
+  const selectedModel = findModelByReference(activeConversation?.modelId, activeConversation?.sourceApiId) || fallbackModel;
+
+  return {
+    modelId: activeConversation?.modelId || legacyDefaults.modelId || selectedModel?.id || "",
+    sourceApiId: activeConversation?.sourceApiId || selectedModel?.sourceApiId || "",
+    systemPrompt: activeConversation?.systemPrompt || legacyDefaults.systemPrompt || "",
+    temperature:
+      typeof activeConversation?.temperature === "number"
+        ? activeConversation.temperature
+        : legacyDefaults.temperature
+  };
+}
+
+function createConversation(overrides = {}) {
+  const defaults = getConversationDefaults();
+  const createdAt = Date.now();
+
+  return {
+    id: createId("conversation"),
+    title: "新对话",
+    createdAt,
+    updatedAt: createdAt,
+    modelId:
+      typeof overrides.modelId === "string"
+        ? overrides.modelId
+        : defaults.modelId || state.models[0]?.id || "",
+    sourceApiId:
+      typeof overrides.sourceApiId === "string"
+        ? overrides.sourceApiId
+        : defaults.sourceApiId || state.models[0]?.sourceApiId || "",
+    systemPrompt:
+      typeof overrides.systemPrompt === "string" ? overrides.systemPrompt : defaults.systemPrompt,
+    temperature:
+      overrides.temperature !== undefined
+        ? clampTemperature(overrides.temperature)
+        : clampTemperature(defaults.temperature),
+    pinned: Boolean(overrides.pinned),
+    messages: Array.isArray(overrides.messages)
+      ? overrides.messages.map(sanitizeStoredMessage)
+      : []
+  };
+}
+
+function ensureConversationModel(conversation) {
+  if (!conversation || !state.models.length) {
+    return;
+  }
+
+  const matchedModel = findModelByReference(conversation.modelId, conversation.sourceApiId);
+
+  if (!matchedModel) {
+    conversation.modelId = state.models[0].id;
+    conversation.sourceApiId = state.models[0].sourceApiId || "";
+  }
+}
+
+function getSelectedModel() {
+  const activeConversation = getActiveConversation();
+
+  if (!activeConversation) {
+    return null;
+  }
+
+  return findModelByReference(activeConversation.modelId, activeConversation.sourceApiId) || null;
+}
+
+function ensureImageGenerationModel() {
+  if (!state.imageModels.length) {
+    state.imageGeneration.modelId = "";
+    state.imageGeneration.sourceApiId = "";
+    return;
+  }
+
+  const matchedModel =
+    state.imageModels.find((model) => {
+      return (
+        model.id === state.imageGeneration.modelId &&
+        model.sourceApiId === state.imageGeneration.sourceApiId
+      );
+    }) || null;
+
+  if (!matchedModel) {
+    state.imageGeneration.modelId = state.imageModels[0].id;
+    state.imageGeneration.sourceApiId = state.imageModels[0].sourceApiId || "";
+  }
+}
+
+function getSelectedImageModel() {
+  if (!state.imageGeneration.modelId) {
+    return null;
+  }
+
+  return (
+    state.imageModels.find((model) => {
+      return (
+        model.id === state.imageGeneration.modelId &&
+        model.sourceApiId === state.imageGeneration.sourceApiId
+      );
+    }) || null
+  );
+}
+
+function setImageGenerationModel(modelKeyOrId, fallbackSourceApiId = "") {
+  const nextModelReference =
+    String(modelKeyOrId || "").includes("::") || !fallbackSourceApiId
+      ? parseModelKey(modelKeyOrId)
+      : {
+          modelId: String(modelKeyOrId || "").trim(),
+          sourceApiId: String(fallbackSourceApiId || "").trim()
+        };
+  const matchedModel = findModelByReference(
+    nextModelReference.modelId,
+    nextModelReference.sourceApiId,
+    state.imageModels
+  );
+
+  if (!matchedModel) {
+    return;
+  }
+
+  state.imageGeneration.modelId = matchedModel.id;
+  state.imageGeneration.sourceApiId = matchedModel.sourceApiId || "";
+  renderImageModelSelect();
+  renderImageGenerationControls();
+  renderModelList();
+}
+
+function renderModelSelect() {
+  const activeConversation = getActiveConversation();
+  const groupedModels = state.models.reduce((groups, model) => {
+    const key = `${String(model.sourceApiName || "未命名接口").trim()} · ${formatProvider(model.owned_by)}`;
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  elements.modelSelect.innerHTML = "";
+
+  if (!state.models.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用聊天模型";
+    elements.modelSelect.appendChild(option);
+    elements.modelSelect.disabled = true;
+    return;
+  }
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+      option.textContent = model.id;
+      option.selected =
+        model.id === activeConversation?.modelId &&
+        model.sourceApiId === activeConversation?.sourceApiId;
+      group.appendChild(option);
+    }
+
+    elements.modelSelect.appendChild(group);
+  }
+
+  elements.modelSelect.disabled = state.loading;
+}
+
+function renderImageModelSelect() {
+  if (!elements.imageModelSelect) {
+    return;
+  }
+
+  ensureImageGenerationModel();
+  elements.imageModelSelect.innerHTML = "";
+
+  if (!state.imageModels.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用生图模型";
+    elements.imageModelSelect.appendChild(option);
+    elements.imageModelSelect.disabled = true;
+    return;
+  }
+
+  const groupedModels = state.imageModels.reduce((groups, model) => {
+    const key = `${String(model.sourceApiName || "未命名接口").trim()} · ${formatProvider(model.owned_by)}`;
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+      option.textContent = model.id;
+      option.selected =
+        model.id === state.imageGeneration.modelId &&
+        model.sourceApiId === state.imageGeneration.sourceApiId;
+      group.appendChild(option);
+    }
+
+    elements.imageModelSelect.appendChild(group);
+  }
+
+  elements.imageModelSelect.disabled = state.imageGeneration.loading;
+}
+
+function filterModels() {
+  const keyword = elements.modelSearchInput.value.trim().toLowerCase();
+
+  state.filteredModels = state.allModels.filter((model) => {
+    const capabilities = getModelCapabilities(model);
+    const capabilityText = `${capabilities.chatCompletion ? "聊天" : ""} ${capabilities.imageGeneration ? "生图" : ""}`;
+    const haystack = `${model.id} ${model.owned_by || ""} ${model.sourceApiName || ""} ${capabilityText}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
+}
+
+function renderModelList() {
+  const activeConversation = getActiveConversation();
+  const selectedImageModel = getSelectedImageModel();
+  filterModels();
+  renderConfigSummary();
+
+  if (!state.filteredModels.length) {
+    elements.modelList.innerHTML = '<div class="empty-state compact">没有匹配的模型</div>';
+    return;
+  }
+
+  elements.modelList.innerHTML = "";
+
+  for (const model of state.filteredModels) {
+    const capabilities = getModelCapabilities(model);
+    const isActiveChatModel =
+      model.id === activeConversation?.modelId &&
+      model.sourceApiId === activeConversation?.sourceApiId;
+    const isActiveImageModel =
+      model.id === selectedImageModel?.id &&
+      model.sourceApiId === selectedImageModel?.sourceApiId;
+    const isUsableModel = capabilities.chatCompletion || capabilities.imageGeneration;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `model-item${isActiveChatModel || isActiveImageModel ? " active" : ""}`;
+    button.disabled = state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel;
+
+    const top = document.createElement("div");
+    top.className = "model-item-top";
+
+    const name = document.createElement("span");
+    name.className = "model-name";
+    name.textContent = model.id;
+
+    const provider = document.createElement("span");
+    provider.className = "model-provider";
+    provider.textContent = getModelSourceLabel(model);
+
+    const badges = document.createElement("div");
+    badges.className = "model-capability-badges";
+
+    if (capabilities.chatCompletion) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge chat";
+      badge.textContent = "聊天";
+      badges.appendChild(badge);
+    }
+
+    if (capabilities.imageGeneration) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge image";
+      badge.textContent = "生图";
+      badges.appendChild(badge);
+    }
+
+    if (!isUsableModel) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge other";
+      badge.textContent = "其他";
+      badges.appendChild(badge);
+    }
+
+    const bottom = document.createElement("div");
+    bottom.className = "model-item-bottom";
+
+    const createdAt = document.createElement("span");
+    createdAt.className = "model-date";
+    createdAt.textContent = `创建于 ${formatDate(model.created)}`;
+
+    const activeLabel = document.createElement("span");
+    activeLabel.className = "model-date";
+
+    if (isActiveChatModel) {
+      activeLabel.textContent = "当前聊天模型";
+    } else if (isActiveImageModel) {
+      activeLabel.textContent = "当前生图模型";
+    } else if (capabilities.chatCompletion) {
+      activeLabel.textContent = capabilities.imageGeneration ? "点击切换为聊天模型" : "点击切换";
+    } else if (capabilities.imageGeneration) {
+      activeLabel.textContent = "点击切换到图片生成";
+    } else {
+      activeLabel.textContent = "不可用于聊天";
+    }
+
+    top.append(name, provider, badges);
+    bottom.append(createdAt, activeLabel);
+    button.append(top, bottom);
+
+    button.addEventListener("click", () => {
+      if (state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel) {
+        return;
+      }
+
+      const nextModelKey = model.modelKey || buildModelKey(model.sourceApiId, model.id);
+
+      if (capabilities.imageGeneration && state.activeSidebarTab === "images") {
+        setImageGenerationModel(nextModelKey);
+        return;
+      }
+
+      if (capabilities.chatCompletion) {
+        setConversationModel(nextModelKey);
+        return;
+      }
+
+      if (capabilities.imageGeneration) {
+        setImageGenerationModel(nextModelKey);
+        setSidebarTab("images");
+      }
+    });
+
+    elements.modelList.appendChild(button);
+  }
+}
+
+function renderImageGenerationControls() {
+  const selectedImageModel = getSelectedImageModel();
+  const hasImageModels = state.imageModels.length > 0;
+
+  if (elements.imageGenerationStatus) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationStatus.textContent = "请先登录后再使用图片生成。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationStatus.textContent = "当前 API 未识别到生图模型。";
+    } else {
+      elements.imageGenerationStatus.textContent = `已从当前配置的接口中识别到 ${state.imageModels.length} 个生图模型。`;
+    }
+  }
+
+  if (elements.imageGenerationModelMeta) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationModelMeta.textContent = "请先登录后再使用图片生成功能。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationModelMeta.textContent = "没有从已启用接口的 /v1/models 中识别到可用的生图模型。";
+    } else {
+      const sourceLabel = selectedImageModel?.sourceApiName ? `（${selectedImageModel.sourceApiName}）` : "";
+      elements.imageGenerationModelMeta.textContent = `当前生图模型：${selectedImageModel?.id || state.imageGeneration.modelId}${sourceLabel}`;
+    }
+  }
+
+  renderImageModelSelect();
+
+  if (elements.imageModelSelect) {
+    elements.imageModelSelect.disabled = state.imageGeneration.loading || !hasImageModels;
+  }
+
+  if (elements.imageSizeSelect) {
+    elements.imageSizeSelect.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.imagePromptInput) {
+    elements.imagePromptInput.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.generateImageButton) {
+    elements.generateImageButton.disabled =
+      state.imageGeneration.loading || !state.adminAuth.authenticated || !hasImageModels;
+    elements.generateImageButton.textContent = state.imageGeneration.loading ? "生成中..." : "生成图片";
+  }
+}
+
+function renderImageGenerationResults() {
+  if (!elements.imageResultList) {
+    return;
+  }
+
+  const results = Array.isArray(state.imageGeneration.results) ? state.imageGeneration.results : [];
+  elements.imageResultList.innerHTML = "";
+
+  if (!results.length) {
+    elements.imageResultList.innerHTML = '<div class="empty-state compact">暂无生成结果</div>';
+    return;
+  }
+
+  for (const item of results) {
+    const card = document.createElement("article");
+    card.className = "image-result-card";
+
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "image-result-preview";
+    previewButton.addEventListener("click", () => {
+      openImagePreview({
+        url: item.url,
+        name: item.modelId || "生成图片"
+      });
+    });
+
+    const image = document.createElement("img");
+    image.className = "image-result-image";
+    image.src = item.url;
+    image.alt = item.prompt || "生成图片";
+    image.loading = "lazy";
+    previewButton.appendChild(image);
+
+    const meta = document.createElement("div");
+    meta.className = "image-result-meta";
+
+    const top = document.createElement("div");
+    top.className = "image-result-top";
+
+    const model = document.createElement("strong");
+    const modelSourceLabel = item.sourceApiName ? `（${item.sourceApiName}）` : "";
+    model.textContent = `${item.modelId || "生图模型"}${modelSourceLabel}`;
+
+    const time = document.createElement("span");
+    time.className = "image-result-time";
+    time.textContent = formatImageGenerationTimestamp(item.timestamp);
+
+    top.append(model, time);
+
+    const prompt = document.createElement("p");
+    prompt.className = "image-result-prompt";
+    prompt.textContent = item.prompt || "";
+    meta.append(top, prompt);
+
+    if (item.revisedPrompt && item.revisedPrompt !== item.prompt) {
+      const revisedPrompt = document.createElement("p");
+      revisedPrompt.className = "image-result-revised-prompt";
+      revisedPrompt.textContent = `修订提示词：${item.revisedPrompt}`;
+      meta.appendChild(revisedPrompt);
+    }
+
+    if (item.size) {
+      const size = document.createElement("p");
+      size.className = "image-result-size";
+      size.textContent = `尺寸：${item.size}`;
+      meta.appendChild(size);
+    }
+
+    card.append(previewButton, meta);
+    elements.imageResultList.appendChild(card);
+  }
+}
+
+function renderTestResult() {
+  const result = state.configForm.testResult;
+
+  if (!result) {
+    elements.configTestResult.hidden = true;
+    elements.configTestResult.textContent = "";
+    elements.configTestResult.className = "result-box";
+    return;
+  }
+
+  elements.configTestResult.hidden = false;
+  elements.configTestResult.className = `result-box ${result.ok ? "success" : "warning"}`;
+
+  if (result.ok) {
+    const sampleModels = Array.isArray(result.sampleModels) && result.sampleModels.length
+      ? `聊天模型示例：${result.sampleModels.join("、")}`
+      : "聊天模型示例：无";
+    const sampleImageModels = Array.isArray(result.sampleImageModels) && result.sampleImageModels.length
+      ? `生图模型示例：${result.sampleImageModels.join("、")}`
+      : "生图模型示例：无";
+    const apiStatuses = Array.isArray(result.apiStatuses)
+      ? result.apiStatuses.map((item) => {
+        if (!item?.ok) {
+          return `接口 ${item?.name || "未命名"}：失败${item?.detail ? `（${item.detail}）` : ""}`;
+        }
+
+        return `接口 ${item?.name || "未命名"}：成功，模型 ${item?.totalModelCount || 0} 个（聊天 ${item?.chatModelCount || 0} / 生图 ${item?.imageModelCount || 0}）`;
+      })
+      : [];
+
+    elements.configTestResult.textContent = [
+      "测试成功",
+      `接口数量：${result.apiCount || 0}`,
+      `模型总数：${result.modelCount || 0}`,
+      `聊天模型：${result.chatModelCount || 0}`,
+      `生图模型：${result.imageModelCount || 0}`,
+      sampleModels,
+      sampleImageModels,
+      ...apiStatuses
+    ].join("\n");
+    return;
+  }
+
+  elements.configTestResult.textContent = `测试失败\n${result.detail || "请检查接口地址、密钥和网络状态。"}`;
+}
+
+function renderAdminAuthState() {
+  const user = state.adminAuth.user;
+  const isAuthenticated = Boolean(state.adminAuth.authenticated && user);
+  const isAdmin = Boolean(isAuthenticated && user.role === "admin");
+
+  elements.adminAuthIdentityText.textContent = isAuthenticated ? user.username : "用户登录";
+  elements.adminAuthRoleBadge.textContent = isAuthenticated
+    ? user.role === "admin"
+      ? "管理员"
+      : "普通用户"
+    : "未登录";
+  elements.adminAuthRoleBadge.classList.toggle("admin", isAuthenticated && user.role === "admin");
+  elements.adminAuthRoleBadge.classList.toggle("user", isAuthenticated && user.role !== "admin");
+  elements.adminAuthRoleBadge.classList.toggle("guest", !isAuthenticated);
+  elements.adminAuthStatusText.textContent = isAuthenticated ? "点击退出登录" : "点击登录或注册";
+  elements.adminAuthButton.setAttribute("aria-label", isAuthenticated ? "退出登录" : "打开登录面板");
+
+  if (
+    (!isAuthenticated && state.activeSidebarTab === "images") ||
+    (!isAdmin && (state.activeSidebarTab === "models" || state.activeSidebarTab === "users" || state.activeSidebarTab === "announcements"))
+  ) {
+    setSidebarTab("conversations");
+  } else {
+    renderSidebarNavigation();
+  }
+
+  renderUserList();
+  renderAnnouncementList();
+  renderAnnouncementNotice();
+  renderImageGenerationControls();
+  renderImageGenerationResults();
+  setConfigButtonsState();
+}
+
+async function loginAdmin() {
+  const username = elements.adminAuthUsernameInput.value.trim();
+  const password = elements.adminAuthPasswordInput.value;
+  const isRegisterMode = state.adminAuth.mode === "register";
+
+  if (!username) {
+    setAdminAuthError("请输入用户名。");
+    return;
+  }
+
+  if (!String(password || "").trim()) {
+    setAdminAuthError("请输入密码。");
+    return;
+  }
+
+  if (state.adminAuth.loggingIn) {
+    return;
+  }
+
+  state.adminAuth.loggingIn = true;
+  elements.adminAuthSubmitButton.disabled = true;
+  elements.adminAuthCancelButton.disabled = true;
+  elements.adminAuthModeToggleButton.disabled = true;
+  setAdminAuthError("");
+
+  try {
+    const response = await fetch(isRegisterMode ? "/api/auth/register" : "/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(parseErrorPayload(payload, isRegisterMode ? "注册失败。" : "登录失败。"));
+    }
+
+    const nextTabAfterLogin = state.adminAuth.nextTabAfterLogin;
+    state.adminAuth.authenticated = true;
+    state.adminAuth.user = payload.user || null;
+    await switchConversationStateByUser(state.adminAuth.authenticated, state.adminAuth.user);
+    renderAdminAuthState();
+
+    if (isAdminUser()) {
+      await loadAdminConfig();
+      await loadAdminUsers();
+      await loadAdminAnnouncements();
+    } else {
+      clearAdminConfigState();
+      clearAdminUsersState();
+      clearAdminAnnouncementsState();
+      renderUserList();
+      renderAnnouncementList();
+    }
+
+    closeAdminAuthDialog();
+    setInlineBanner(payload.message || (isRegisterMode ? "注册成功。" : "登录成功。"), "success");
+
+    if (
+      nextTabAfterLogin === "images" ||
+      ((nextTabAfterLogin === "models" ||
+        nextTabAfterLogin === "users" ||
+        nextTabAfterLogin === "announcements") &&
+        isAdminUser())
+    ) {
+      setSidebarTab(nextTabAfterLogin);
+    } else if (
+      nextTabAfterLogin === "models" ||
+      nextTabAfterLogin === "users" ||
+      nextTabAfterLogin === "announcements"
+    ) {
+      setSidebarTab("conversations");
+    }
+
+    await loadLatestAnnouncement();
+  } catch (error) {
+    setAdminAuthError(error.message || (isRegisterMode ? "注册失败。" : "登录失败。"));
+  } finally {
+    state.adminAuth.loggingIn = false;
+    elements.adminAuthSubmitButton.disabled = false;
+    elements.adminAuthCancelButton.disabled = false;
+    elements.adminAuthModeToggleButton.disabled = false;
+    setLoading(state.loading);
+    renderImageGenerationControls();
+  }
+}
+
+function renderTestResult() {
+  const result = state.configForm.testResult;
+
+  if (!result) {
+    elements.configTestResult.hidden = true;
+    elements.configTestResult.textContent = "";
+    elements.configTestResult.className = "result-box";
+    return;
+  }
+
+  elements.configTestResult.hidden = false;
+  elements.configTestResult.className = `result-box ${result.ok ? "success" : "warning"}`;
+
+  if (result.ok) {
+    const sampleModels = Array.isArray(result.sampleModels) && result.sampleModels.length
+      ? `聊天模型示例：${result.sampleModels.join("、")}`
+      : "聊天模型示例：无";
+    const sampleImageModels = Array.isArray(result.sampleImageModels) && result.sampleImageModels.length
+      ? `生图模型示例：${result.sampleImageModels.join("、")}`
+      : "生图模型示例：无";
+
+    elements.configTestResult.textContent = [
+      "测试成功",
+      `接口：${result.apiBaseUrl}`,
+      `模型总数：${result.modelCount || 0}`,
+      `聊天模型：${result.chatModelCount || 0}`,
+      `生图模型：${result.imageModelCount || 0}`,
+      sampleModels,
+      sampleImageModels
+    ].join("\n");
+    return;
+  }
+
+  elements.configTestResult.textContent = `测试失败\n${result.detail || "请检查 API Base URL 和 API Key。"}`;
+}
+
+function setConnectionStatus(text, isHealthy = false) {
+  elements.connectionStatus.textContent = text;
+  elements.connectionStatus.style.color = isHealthy ? "var(--success)" : "var(--muted)";
+}
+
+function getModelCapabilities(model) {
+  const capabilities = model?.capabilities && typeof model.capabilities === "object"
+    ? model.capabilities
+    : {};
+
+  return {
+    chatCompletion: Boolean(capabilities.chatCompletion),
+    imageGeneration: Boolean(capabilities.imageGeneration)
+  };
+}
+
+function ensureImageGenerationModel() {
+  if (!state.imageModels.length) {
+    state.imageGeneration.modelId = "";
+    state.imageGeneration.sourceApiId = "";
+    return;
+  }
+
+  const matchedModel = state.imageModels.find((model) => {
+    return (
+      model.id === state.imageGeneration.modelId &&
+      model.sourceApiId === state.imageGeneration.sourceApiId
+    );
+  });
+
+  if (!matchedModel) {
+    state.imageGeneration.modelId = state.imageModels[0].id;
+    state.imageGeneration.sourceApiId = state.imageModels[0].sourceApiId || "";
+  }
+}
+
+function getSelectedImageModel() {
+  if (!state.imageGeneration.modelId) {
+    return null;
+  }
+
+  return (
+    state.imageModels.find((model) => {
+      return (
+        model.id === state.imageGeneration.modelId &&
+        model.sourceApiId === state.imageGeneration.sourceApiId
+      );
+    }) || null
+  );
+}
+
+function setImageGenerationModel(modelKeyOrModelId, fallbackSourceApiId = "") {
+  const { modelId, sourceApiId } =
+    fallbackSourceApiId || String(modelKeyOrModelId || "").includes("::")
+      ? parseModelKey(modelKeyOrModelId)
+      : { modelId: String(modelKeyOrModelId || "").trim(), sourceApiId: String(fallbackSourceApiId || "").trim() };
+  const matchedModel = state.imageModels.find((model) => {
+    return model.id === modelId && model.sourceApiId === sourceApiId;
+  });
+
+  if (!matchedModel) {
+    return;
+  }
+
+  state.imageGeneration.modelId = matchedModel.id;
+  state.imageGeneration.sourceApiId = matchedModel.sourceApiId || "";
+  renderImageModelSelect();
+  renderImageGenerationControls();
+  renderModelList();
+}
+
+function ensureConversationModel(conversation) {
+  if (!conversation || !state.models.length) {
+    return;
+  }
+
+  const matchedModel = state.models.find((model) => {
+    return model.id === conversation.modelId && model.sourceApiId === conversation.sourceApiId;
+  });
+
+  if (!matchedModel) {
+    conversation.modelId = state.models[0].id;
+    conversation.sourceApiId = state.models[0].sourceApiId || "";
   }
 }
 
@@ -1928,7 +4103,11 @@ function getSelectedModel() {
     return null;
   }
 
-  return state.models.find((model) => model.id === activeConversation.modelId) || null;
+  return (
+    state.models.find((model) => {
+      return model.id === activeConversation.modelId && model.sourceApiId === activeConversation.sourceApiId;
+    }) || null
+  );
 }
 
 function sortConversations(conversations) {
@@ -2557,4 +4736,461 @@ function renderEmptyState() {
   wrapper.append(title, copy, suggestions, note);
   elements.chatMessages.innerHTML = "";
   elements.chatMessages.appendChild(wrapper);
+}
+
+function renderConfigSummary() {
+  const chatModelCount = state.models.length;
+  const imageModelCount = state.imageModels.length;
+  const totalModelCount = state.allModels.length || chatModelCount;
+
+  elements.apiBaseUrl.textContent = state.apiBaseUrl || "Not configured";
+  elements.keyStatus.textContent = state.keyConfigured ? "Configured" : "Missing";
+  elements.modelStats.textContent = `${chatModelCount} 个聊天模型 / ${imageModelCount} 个生图模型 / 共 ${totalModelCount} 个模型`;
+}
+
+function filterModels() {
+  const keyword = elements.modelSearchInput.value.trim().toLowerCase();
+
+  state.filteredModels = state.allModels.filter((model) => {
+    const capabilities = getModelCapabilities(model);
+    const capabilityText = `${capabilities.chatCompletion ? "chat" : ""} ${capabilities.imageGeneration ? "image" : ""}`;
+    const haystack = `${model.id} ${model.owned_by || ""} ${capabilityText}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
+}
+
+function renderModelSelect() {
+  const activeConversation = getActiveConversation();
+  const groupedModels = state.models.reduce((groups, model) => {
+    const key = formatProvider(model.owned_by);
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  elements.modelSelect.innerHTML = "";
+
+  if (!state.models.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No chat models";
+    elements.modelSelect.appendChild(option);
+    elements.modelSelect.disabled = true;
+    return;
+  }
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.id;
+      option.selected = model.id === activeConversation?.modelId;
+      group.appendChild(option);
+    }
+
+    elements.modelSelect.appendChild(group);
+  }
+
+  elements.modelSelect.disabled = state.loading;
+}
+
+function renderImageModelSelect() {
+  if (!elements.imageModelSelect) {
+    return;
+  }
+
+  ensureImageGenerationModel();
+  elements.imageModelSelect.innerHTML = "";
+
+  if (!state.imageModels.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无可用生图模型";
+    elements.imageModelSelect.appendChild(option);
+    elements.imageModelSelect.disabled = true;
+    return;
+  }
+
+  const groupedModels = state.imageModels.reduce((groups, model) => {
+    const key = formatProvider(model.owned_by);
+    groups[key] = groups[key] || [];
+    groups[key].push(model);
+    return groups;
+  }, {});
+
+  for (const [provider, models] of Object.entries(groupedModels)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.id;
+      option.selected = model.id === state.imageGeneration.modelId;
+      group.appendChild(option);
+    }
+
+    elements.imageModelSelect.appendChild(group);
+  }
+
+  elements.imageModelSelect.disabled = state.imageGeneration.loading;
+}
+
+function setImageGenerationBanner(message = "", type = "warning") {
+  if (!elements.imageGenerationBanner) {
+    return;
+  }
+
+  if (!message) {
+    elements.imageGenerationBanner.hidden = true;
+    elements.imageGenerationBanner.textContent = "";
+    elements.imageGenerationBanner.className = "inline-banner";
+    return;
+  }
+
+  elements.imageGenerationBanner.hidden = false;
+  elements.imageGenerationBanner.textContent = message;
+  elements.imageGenerationBanner.className = `inline-banner ${type}`;
+}
+
+function formatImageGenerationTimestamp(timestamp) {
+  if (!timestamp) {
+    return "";
+  }
+
+  try {
+    return new Date(timestamp).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  } catch (error) {
+    return "";
+  }
+}
+
+function renderImageGenerationResults() {
+  if (!elements.imageResultList) {
+    return;
+  }
+
+  const results = Array.isArray(state.imageGeneration.results) ? state.imageGeneration.results : [];
+  elements.imageResultList.innerHTML = "";
+
+  if (!results.length) {
+    elements.imageResultList.innerHTML = '<div class="empty-state compact">暂无生成结果</div>';
+    return;
+  }
+
+  for (const item of results) {
+    const card = document.createElement("article");
+    card.className = "image-result-card";
+
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "image-result-preview";
+    previewButton.addEventListener("click", () => {
+      openImagePreview({
+        url: item.url,
+        name: item.modelId || "生成图片"
+      });
+    });
+
+    const image = document.createElement("img");
+    image.className = "image-result-image";
+    image.src = item.url;
+    image.alt = item.prompt || "生成图片";
+    image.loading = "lazy";
+    previewButton.appendChild(image);
+
+    const meta = document.createElement("div");
+    meta.className = "image-result-meta";
+
+    const top = document.createElement("div");
+    top.className = "image-result-top";
+
+    const model = document.createElement("strong");
+    model.textContent = item.modelId || "生图模型";
+
+    const time = document.createElement("span");
+    time.className = "image-result-time";
+    time.textContent = formatImageGenerationTimestamp(item.timestamp);
+
+    top.append(model, time);
+
+    const prompt = document.createElement("p");
+    prompt.className = "image-result-prompt";
+    prompt.textContent = item.prompt || "";
+    meta.append(top, prompt);
+
+    if (item.revisedPrompt && item.revisedPrompt !== item.prompt) {
+      const revisedPrompt = document.createElement("p");
+      revisedPrompt.className = "image-result-revised-prompt";
+      revisedPrompt.textContent = `修订提示词：${item.revisedPrompt}`;
+      meta.appendChild(revisedPrompt);
+    }
+
+    if (item.size) {
+      const size = document.createElement("p");
+      size.className = "image-result-size";
+      size.textContent = `尺寸：${item.size}`;
+      meta.appendChild(size);
+    }
+
+    card.append(previewButton, meta);
+    elements.imageResultList.appendChild(card);
+  }
+}
+
+function renderImageGenerationControls() {
+  const selectedImageModel = getSelectedImageModel();
+  const hasImageModels = state.imageModels.length > 0;
+
+  if (elements.imageGenerationStatus) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationStatus.textContent = "请先登录后再使用图片生成。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationStatus.textContent = "当前 API 未识别到生图模型。";
+    } else {
+      elements.imageGenerationStatus.textContent = `已从当前 API 识别到 ${state.imageModels.length} 个生图模型。`;
+    }
+  }
+
+  if (elements.imageGenerationModelMeta) {
+    if (!state.adminAuth.authenticated) {
+      elements.imageGenerationModelMeta.textContent = "请先登录后再使用图片生成功能。";
+    } else if (!hasImageModels) {
+      elements.imageGenerationModelMeta.textContent = "没有从 /v1/models 中识别到可用的生图模型。";
+    } else {
+      elements.imageGenerationModelMeta.textContent = `当前生图模型：${selectedImageModel?.id || state.imageGeneration.modelId}`;
+    }
+  }
+
+  renderImageModelSelect();
+
+  if (elements.imageModelSelect) {
+    elements.imageModelSelect.disabled = state.imageGeneration.loading || !hasImageModels;
+  }
+
+  if (elements.imageSizeSelect) {
+    elements.imageSizeSelect.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.imagePromptInput) {
+    elements.imagePromptInput.disabled = state.imageGeneration.loading || !state.adminAuth.authenticated;
+  }
+
+  if (elements.generateImageButton) {
+    elements.generateImageButton.disabled =
+      state.imageGeneration.loading || !state.adminAuth.authenticated || !hasImageModels;
+    elements.generateImageButton.textContent = state.imageGeneration.loading ? "生成中..." : "生成图片";
+  }
+}
+
+function renderModelList() {
+  const activeConversation = getActiveConversation();
+  const selectedImageModel = getSelectedImageModel();
+  filterModels();
+  renderConfigSummary();
+
+  if (!state.filteredModels.length) {
+    elements.modelList.innerHTML = '<div class="empty-state compact">没有匹配的模型</div>';
+    return;
+  }
+
+  elements.modelList.innerHTML = "";
+
+  for (const model of state.filteredModels) {
+    const capabilities = getModelCapabilities(model);
+    const isActiveChatModel = model.id === activeConversation?.modelId;
+    const isActiveImageModel = model.id === selectedImageModel?.id;
+    const isUsableModel = capabilities.chatCompletion || capabilities.imageGeneration;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `model-item${isActiveChatModel || isActiveImageModel ? " active" : ""}`;
+    button.disabled = state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel;
+
+    const top = document.createElement("div");
+    top.className = "model-item-top";
+
+    const name = document.createElement("span");
+    name.className = "model-name";
+    name.textContent = model.id;
+
+    const provider = document.createElement("span");
+    provider.className = "model-provider";
+    provider.textContent = formatProvider(model.owned_by);
+
+    const badges = document.createElement("div");
+    badges.className = "model-capability-badges";
+
+    if (capabilities.chatCompletion) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge chat";
+      badge.textContent = "聊天";
+      badges.appendChild(badge);
+    }
+
+    if (capabilities.imageGeneration) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge image";
+      badge.textContent = "生图";
+      badges.appendChild(badge);
+    }
+
+    if (!isUsableModel) {
+      const badge = document.createElement("span");
+      badge.className = "model-capability-badge other";
+      badge.textContent = "其他";
+      badges.appendChild(badge);
+    }
+
+    const bottom = document.createElement("div");
+    bottom.className = "model-item-bottom";
+
+    const createdAt = document.createElement("span");
+    createdAt.className = "model-date";
+    createdAt.textContent = `创建于 ${formatDate(model.created)}`;
+
+    const activeLabel = document.createElement("span");
+    activeLabel.className = "model-date";
+
+    if (isActiveChatModel) {
+      activeLabel.textContent = "当前聊天模型";
+    } else if (isActiveImageModel) {
+      activeLabel.textContent = "当前生图模型";
+    } else if (capabilities.chatCompletion) {
+      activeLabel.textContent = capabilities.imageGeneration ? "点击切换为聊天模型" : "点击切换";
+    } else if (capabilities.imageGeneration) {
+      activeLabel.textContent = "点击切换到图片生成";
+    } else {
+      activeLabel.textContent = "不可用于聊天";
+    }
+
+    top.append(name, provider, badges);
+    bottom.append(createdAt, activeLabel);
+    button.append(top, bottom);
+
+    button.addEventListener("click", () => {
+      if (state.loading || state.configForm.saving || state.configForm.testing || !isUsableModel) {
+        return;
+      }
+
+      if (capabilities.imageGeneration && state.activeSidebarTab === "images") {
+        setImageGenerationModel(model.id);
+        return;
+      }
+
+      if (capabilities.chatCompletion) {
+        setConversationModel(model.id);
+        return;
+      }
+
+      if (capabilities.imageGeneration) {
+        setImageGenerationModel(model.id);
+        setSidebarTab("images");
+      }
+    });
+
+    elements.modelList.appendChild(button);
+  }
+}
+
+function requireUserAccess(nextTab = "conversations") {
+  if (state.adminAuth.authenticated) {
+    return true;
+  }
+
+  showError("请先登录后再使用此功能。");
+  openAdminAuthDialog(nextTab, "login");
+  return false;
+}
+
+function renderSidebarNavigation() {
+  const canAccessAdminTabs = isAdminUser();
+  const canAccessImageTab = Boolean(state.adminAuth.authenticated);
+  const showImages = canAccessImageTab && state.activeSidebarTab === "images";
+  const showModels = canAccessAdminTabs && state.activeSidebarTab === "models";
+  const showUsers = canAccessAdminTabs && state.activeSidebarTab === "users";
+  const showAnnouncements = canAccessAdminTabs && state.activeSidebarTab === "announcements";
+  const showConversations = !showImages && !showModels && !showUsers && !showAnnouncements;
+
+  if (elements.imageGenNavButton) {
+    elements.imageGenNavButton.hidden = !canAccessImageTab;
+    elements.imageGenNavButton.classList.toggle("active", canAccessImageTab && showImages);
+    elements.imageGenNavButton.setAttribute("aria-pressed", String(canAccessImageTab && showImages));
+  }
+
+  elements.modelNavButton.hidden = !canAccessAdminTabs;
+  elements.userNavButton.hidden = !canAccessAdminTabs;
+  elements.announcementNavButton.hidden = !canAccessAdminTabs;
+  elements.chatWorkspace.hidden = !showConversations;
+  if (elements.imageWorkspace) {
+    elements.imageWorkspace.hidden = !showImages;
+  }
+  elements.modelWorkspace.hidden = !showModels;
+  elements.userWorkspace.hidden = !showUsers;
+  elements.announcementWorkspace.hidden = !showAnnouncements;
+  elements.conversationNavButton.classList.toggle("active", showConversations);
+  elements.modelNavButton.classList.toggle("active", canAccessAdminTabs && showModels);
+  elements.userNavButton.classList.toggle("active", canAccessAdminTabs && showUsers);
+  elements.announcementNavButton.classList.toggle("active", canAccessAdminTabs && showAnnouncements);
+  elements.conversationNavButton.setAttribute("aria-pressed", String(showConversations));
+  elements.modelNavButton.setAttribute("aria-pressed", String(canAccessAdminTabs && showModels));
+  elements.userNavButton.setAttribute("aria-pressed", String(canAccessAdminTabs && showUsers));
+  elements.announcementNavButton.setAttribute("aria-pressed", String(canAccessAdminTabs && showAnnouncements));
+}
+
+function setSidebarTab(tab, options = {}) {
+  const { updateHash = true, closeMobileSidebar = true } = options;
+  const canAccessAdminTabs = isAdminUser();
+  const canAccessImageTab = Boolean(state.adminAuth.authenticated);
+  const nextTab = (() => {
+    if (canAccessImageTab && tab === "images") {
+      return "images";
+    }
+
+    if (canAccessAdminTabs && (tab === "models" || tab === "users" || tab === "announcements")) {
+      return tab;
+    }
+
+    return "conversations";
+  })();
+
+  state.activeSidebarTab = nextTab;
+  localStorage.setItem(storageKeys.sidebarTab, state.activeSidebarTab);
+
+  if (updateHash) {
+    const hashByTab = {
+      conversations: "#chat",
+      images: "#images",
+      models: "#models",
+      users: "#users",
+      announcements: "#announcements"
+    };
+    const nextHash = hashByTab[state.activeSidebarTab] || "#chat";
+
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash;
+    }
+  }
+
+  renderSidebarNavigation();
+
+  if (state.activeSidebarTab === "images") {
+    renderImageGenerationControls();
+    renderImageGenerationResults();
+  } else if (state.activeSidebarTab === "users" && isAdminUser()) {
+    loadAdminUsers();
+  } else if (state.activeSidebarTab === "announcements" && isAdminUser()) {
+    loadAdminAnnouncements();
+  }
+
+  if (closeMobileSidebar) {
+    closeMobileSidebarIfNeeded();
+  }
 }
