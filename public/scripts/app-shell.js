@@ -7,6 +7,7 @@ const storageKeys = {
   sidebarTab: "wssxzh.sidebarTab",
   sidebarCollapsed: "wssxzh.sidebarCollapsed",
   webSearchEnabled: "wssxzh.webSearchEnabled",
+  workspacePanelOpen: "wssxzh.workspacePanelOpen",
   legacySelectedModelId: "wssxzh.selectedModelId",
   legacySystemPrompt: "wssxzh.systemPrompt",
   legacyTemperature: "wssxzh.temperature"
@@ -66,6 +67,13 @@ const elements = {
   imagePreviewModal: document.getElementById("imagePreviewModal"),
   imagePreviewImage: document.getElementById("imagePreviewImage"),
   imagePreviewCloseButton: document.getElementById("imagePreviewCloseButton"),
+  workspacePanelToggleButton: document.getElementById("workspacePanelToggleButton"),
+  workspacePanel: document.getElementById("workspacePanel"),
+  workspacePanelMeta: document.getElementById("workspacePanelMeta"),
+  workspaceFileInput: document.getElementById("workspaceFileInput"),
+  workspaceUploadButton: document.getElementById("workspaceUploadButton"),
+  workspaceBanner: document.getElementById("workspaceBanner"),
+  workspaceFileList: document.getElementById("workspaceFileList"),
   chatMessages: document.getElementById("chatMessages"),
   settingsPanel: document.getElementById("settingsPanel"),
   toggleSettingsButton: document.getElementById("toggleSettingsButton"),
@@ -154,6 +162,7 @@ const iconMarkup = {
 };
 
 const storedWebSearchPreference = readStorageItem(storageKeys.webSearchEnabled);
+const storedWorkspacePanelPreference = readStorageItem(storageKeys.workspacePanelOpen);
 
 const state = {
   apiBaseUrl: "",
@@ -175,6 +184,15 @@ const state = {
   webSearchEnabled: storedWebSearchPreference === "1",
   webSearchPreferenceSynced: storedWebSearchPreference !== null,
   webSearchFeatureEnabled: true,
+  workspace: {
+    panelOpen: storedWorkspacePanelPreference !== "0",
+    files: [],
+    loading: false,
+    uploading: false,
+    bannerMessage: "",
+    bannerTone: "",
+    lastConversationId: ""
+  },
   abortController: null,
   typingController: null,
   sidebarUi: {
@@ -1172,6 +1190,9 @@ async function switchConversationStateByUser(
     renderModelList();
     updateSelectedModelView();
     renderMessages();
+    if (typeof loadWorkspaceFilesForActiveConversation === "function") {
+      void loadWorkspaceFilesForActiveConversation();
+    }
     return true;
   } catch (error) {
     console.warn("Failed to switch conversation account scope.", error);
@@ -4361,6 +4382,9 @@ async function deleteConversationById(conversationId, options = {}) {
   renderModelList();
   updateSelectedModelView();
   renderMessages();
+  if (typeof loadWorkspaceFilesForActiveConversation === "function") {
+    void loadWorkspaceFilesForActiveConversation();
+  }
   clearError();
 
   if (forceConversationTab) {

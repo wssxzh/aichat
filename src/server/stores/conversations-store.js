@@ -10,7 +10,8 @@ function createConversationsStore(options) {
     maxMessagesPerConversation,
     maxConversationMessageLength,
     maxConversationSystemPromptLength,
-    maxConversationTitleLength
+    maxConversationTitleLength,
+    onUserConversationsStateSaved
   } = options;
   const maxConversationAttachmentsPerMessage = 3;
   const maxConversationAttachmentUrlLength = 4 * 1024 * 1024;
@@ -244,6 +245,7 @@ function saveUserConversationsState(userId, payload) {
     throw userIdError;
   }
 
+  const previousState = sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
   const sanitized = sanitizeUserConversationsState(payload);
   conversationsStore.users[normalizedUserId] = {
     ...sanitized,
@@ -251,7 +253,21 @@ function saveUserConversationsState(userId, payload) {
   };
   persistConversationsStore();
 
-  return sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+  const nextState = sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+
+  if (typeof onUserConversationsStateSaved === "function") {
+    try {
+      onUserConversationsStateSaved({
+        userId: normalizedUserId,
+        previousState,
+        nextState
+      });
+    } catch (error) {
+      console.warn("Failed to run conversations post-save hook:", error);
+    }
+  }
+
+  return nextState;
 }
 
 

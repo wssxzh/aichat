@@ -91,6 +91,9 @@ const env = {
   conversationsConfigPath: process.env.CONVERSATIONS_CONFIG_PATH
     ? path.resolve(process.env.CONVERSATIONS_CONFIG_PATH)
     : path.join(rootDir, ".runtime-conversations.json"),
+  workspacesRootDir: process.env.WORKSPACES_ROOT_DIR
+    ? path.resolve(process.env.WORKSPACES_ROOT_DIR)
+    : path.join(rootDir, "data", "workspaces"),
   maxStoredAnnouncements: Math.max(
     1,
     Number(process.env.MAX_STORED_ANNOUNCEMENTS || process.env.ANNOUNCEMENTS_MAX_ITEMS) || 80
@@ -110,6 +113,38 @@ const env = {
   maxConversationSystemPromptLength: Math.min(
     32000,
     Math.max(50, Number(process.env.MAX_CONVERSATION_SYSTEM_PROMPT_LENGTH) || 6000)
+  ),
+  maxWorkspaceFilesPerConversation: Math.min(
+    50,
+    Math.max(1, Number(process.env.MAX_WORKSPACE_FILES_PER_CONVERSATION) || 20)
+  ),
+  maxWorkspaceFilesPerRequest: Math.min(
+    10,
+    Math.max(1, Number(process.env.MAX_WORKSPACE_FILES_PER_REQUEST) || 5)
+  ),
+  maxWorkspaceFileSizeBytes: Math.min(
+    30 * 1024 * 1024,
+    Math.max(512 * 1024, Number(process.env.MAX_WORKSPACE_FILE_SIZE_BYTES) || 10 * 1024 * 1024)
+  ),
+  workspaceChunkSize: Math.min(
+    4000,
+    Math.max(300, Number(process.env.WORKSPACE_CHUNK_SIZE) || 1100)
+  ),
+  workspaceChunkOverlap: Math.min(
+    800,
+    Math.max(0, Number(process.env.WORKSPACE_CHUNK_OVERLAP) || 180)
+  ),
+  workspaceMaxChunksPerFile: Math.min(
+    200,
+    Math.max(1, Number(process.env.WORKSPACE_MAX_CHUNKS_PER_FILE) || 80)
+  ),
+  workspaceSearchResultCount: Math.min(
+    10,
+    Math.max(1, Number(process.env.WORKSPACE_SEARCH_RESULT_COUNT) || 6)
+  ),
+  workspaceContextMaxLength: Math.min(
+    24000,
+    Math.max(1000, Number(process.env.WORKSPACE_CONTEXT_MAX_LENGTH) || 8000)
   ),
   maxConversationTitleLength: 120,
   sessionCookieName: "aichat_session",

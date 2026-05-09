@@ -141,6 +141,20 @@
             </div>
 
             <div class="header-actions">
+              <button
+                id="workspacePanelToggleButton"
+                class="icon-button workspace-panel-toggle"
+                type="button"
+                title="显示工作区文件"
+                aria-label="显示工作区文件"
+                aria-expanded="false"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Z" />
+                  <path d="m10 11 2 2 2-2" />
+                  <path d="M12 13v4" />
+                </svg>
+              </button>
               <button id="clearChatButton" class="icon-button" type="button" title="删除当前对话" hidden>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M4 7h16M10 11v6M14 11v6M9 4h6l1 3H8l1-3Zm-2 3h10l-1 12H8L7 7Z" />
@@ -150,6 +164,34 @@
           </header>
 
           <div id="errorBanner" class="error-banner" hidden></div>
+
+          <section id="workspacePanel" class="workspace-panel collapsed" aria-label="工作区文件面板">
+            <div class="workspace-panel-head">
+              <div class="workspace-panel-copy">
+                <h3>工作区文件</h3>
+                <p id="workspacePanelMeta" class="section-caption">当前对话可上传文件，并在对话时进行检索增强。</p>
+              </div>
+              <div class="workspace-panel-actions">
+                <input
+                  id="workspaceFileInput"
+                  type="file"
+                  accept=".txt,.md,.markdown,.pdf,.docx,.csv,.xlsx,.xls,.json"
+                  multiple
+                  hidden
+                />
+                <button id="workspaceUploadButton" class="chip-button" type="button" title="上传工作区文件">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 16V6" />
+                    <path d="m8.5 9.5 3.5-3.5 3.5 3.5" />
+                    <path d="M5 18.5A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5" />
+                  </svg>
+                  <span>上传文件</span>
+                </button>
+              </div>
+            </div>
+            <div id="workspaceBanner" class="inline-banner" hidden></div>
+            <div id="workspaceFileList" class="workspace-file-list"></div>
+          </section>
 
           <section id="chatMessages" class="chat-stage"></section>
 

@@ -1,8 +1,16 @@
 "use strict";
 
+const multer = require("multer");
+
 function registerApiRoutes(app, dependencies) {
   const {
-    env: { chatRequestTimeoutMs, webSearchServerEnabled, webSearchResultCount },
+    env: {
+      chatRequestTimeoutMs,
+      webSearchServerEnabled,
+      webSearchResultCount,
+      maxWorkspaceFilesPerRequest,
+      maxWorkspaceFileSizeBytes
+    },
     authService: {
       requireAuth,
       requireAdmin,
@@ -35,6 +43,9 @@ function registerApiRoutes(app, dependencies) {
       saveUserConversationsState,
       conversationsStore,
       persistConversationsStore
+    },
+    workspacesStore: {
+      deleteUserWorkspaceData
     },
     runtimeConfigStore: {
       getRuntimeConfig,
@@ -69,8 +80,21 @@ function registerApiRoutes(app, dependencies) {
       buildImageGenerationPayload,
       generateImagesWithConfig,
       sendSseEvent
+    },
+    workspaceSearchService: {
+      listWorkspaceFiles,
+      uploadWorkspaceFiles,
+      deleteWorkspaceFile,
+      enrichPayloadWithWorkspaceContext
     }
   } = dependencies;
+  const workspaceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: maxWorkspaceFileSizeBytes,
+      files: maxWorkspaceFilesPerRequest
+    }
+  });
 
 function resolveRequestApiConfig(sourceApiId) {
   const enabledApiConfigs = getEnabledApiConfigs();
@@ -316,6 +340,74 @@ app.put("/api/conversations", requireAuth, (request, response, next) => {
   }
 });
 
+app.get("/api/conversations/:conversationId/workspace/files", requireAuth, (request, response, next) => {
+  try {
+    response.json({
+      files: listWorkspaceFiles(request.currentUser.id, request.params.conversationId)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post(
+  "/api/conversations/:conversationId/workspace/files",
+  requireAuth,
+  workspaceUpload.array("files", maxWorkspaceFilesPerRequest),
+  async (request, response, next) => {
+    try {
+      const files = Array.isArray(request.files) ? request.files : [];
+
+      if (!files.length) {
+        return response.status(400).json({
+          error: "请求失败",
+          detail: "请先选择需要上传的工作区文件。"
+        });
+      }
+
+      const result = await uploadWorkspaceFiles(
+        request.currentUser.id,
+        request.params.conversationId,
+        files
+      );
+
+      response.status(201).json({
+        ...result,
+        message: result.uploaded.length
+          ? `已导入 ${result.uploaded.length} 个工作区文件。`
+          : "没有文件被成功导入。"
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+app.delete("/api/conversations/:conversationId/workspace/files/:fileId", requireAuth, (request, response, next) => {
+  try {
+    const removedFile = deleteWorkspaceFile(
+      request.currentUser.id,
+      request.params.conversationId,
+      request.params.fileId
+    );
+
+    if (!removedFile) {
+      return response.status(404).json({
+        error: "未找到文件",
+        detail: "指定的工作区文件不存在。"
+      });
+    }
+
+    response.json({
+      file: removedFile,
+      files: listWorkspaceFiles(request.currentUser.id, request.params.conversationId),
+      message: "工作区文件已删除。"
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use("/api/admin", requireAdmin);
 
 app.get("/api/admin/announcements", (request, response) => {
@@ -542,6 +634,7 @@ app.delete("/api/admin/users/:id", (request, response, next) => {
       delete conversationsStore.users[targetUser.id];
       persistConversationsStore();
     }
+    deleteUserWorkspaceData(targetUser.id);
     invalidateUserSessions(targetUser.id);
 
     response.json({
@@ -569,7 +662,12 @@ app.post("/api/chat", requireAuth, async (request, response, next) => {
 
   try {
     const config = resolveRequestApiConfig(result.sourceApiId);
-    const payload = await enrichPayloadWithWebSearch(result.payload, request.body);
+    const workspacePayload = await enrichPayloadWithWorkspaceContext(
+      result.payload,
+      request.body,
+      request.currentUser
+    );
+    const payload = await enrichPayloadWithWebSearch(workspacePayload, request.body);
     const requestBody = JSON.stringify(payload);
     const upstreamResponse = await requestJsonWithRetry(`${config.apiBaseUrl}/chat/completions`, {
       method: "POST",
@@ -599,7 +697,12 @@ app.post("/api/chat/stream", requireAuth, async (request, response, next) => {
   }
 
   const config = resolveRequestApiConfig(result.sourceApiId);
-  const payload = await enrichPayloadWithWebSearch(result.payload, request.body);
+  const workspacePayload = await enrichPayloadWithWorkspaceContext(
+    result.payload,
+    request.body,
+    request.currentUser
+  );
+  const payload = await enrichPayloadWithWebSearch(workspacePayload, request.body);
   const requestBody = JSON.stringify(payload);
   const target = new URL(`${config.apiBaseUrl}/chat/completions`);
   const client = getHttpClient(target);

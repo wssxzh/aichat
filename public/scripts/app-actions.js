@@ -182,6 +182,365 @@ async function handleImageUploadInputChange(event) {
   }
 }
 
+function formatWorkspaceFileSize(size) {
+  const numeric = Math.max(0, Number(size) || 0);
+
+  if (numeric >= 1024 * 1024) {
+    return `${(numeric / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  if (numeric >= 1024) {
+    return `${Math.round(numeric / 1024)} KB`;
+  }
+
+  return `${numeric} B`;
+}
+
+function setWorkspaceBanner(message = "", tone = "") {
+  state.workspace.bannerMessage = String(message || "").trim();
+  state.workspace.bannerTone = tone === "success" || tone === "warning" ? tone : "";
+}
+
+function setWorkspacePanelOpen(open, options = {}) {
+  state.workspace.panelOpen = Boolean(open);
+
+  if (options.persist !== false) {
+    writeStorageItem(storageKeys.workspacePanelOpen, state.workspace.panelOpen ? "1" : "0");
+  }
+
+  renderWorkspacePanel();
+}
+
+function renderWorkspacePanel() {
+  if (
+    !(elements.workspacePanel instanceof HTMLElement) ||
+    !(elements.workspaceFileList instanceof HTMLElement) ||
+    !(elements.workspacePanelToggleButton instanceof HTMLElement)
+  ) {
+    return;
+  }
+
+  const activeConversation = getActiveConversation();
+  const canUseWorkspace = Boolean(state.adminAuth.authenticated && activeConversation);
+
+  elements.workspacePanel.classList.toggle("collapsed", !state.workspace.panelOpen);
+  if (elements.chatWorkspace instanceof HTMLElement) {
+    elements.chatWorkspace.classList.toggle("workspace-panel-open", state.workspace.panelOpen);
+  }
+  elements.workspacePanelToggleButton.classList.toggle("active", state.workspace.panelOpen);
+  elements.workspacePanelToggleButton.setAttribute("aria-expanded", String(state.workspace.panelOpen));
+  elements.workspacePanelToggleButton.title = state.workspace.panelOpen ? "隐藏工作区文件" : "显示工作区文件";
+  elements.workspacePanelToggleButton.setAttribute(
+    "aria-label",
+    state.workspace.panelOpen ? "隐藏工作区文件" : "显示工作区文件"
+  );
+
+  if (elements.workspacePanelMeta) {
+    if (!state.adminAuth.authenticated) {
+      elements.workspacePanelMeta.textContent = "登录后可为当前对话上传文件，并在回答时进行检索增强。";
+    } else if (!activeConversation) {
+      elements.workspacePanelMeta.textContent = "当前没有可用对话。";
+    } else if (state.workspace.uploading) {
+      elements.workspacePanelMeta.textContent = "正在处理文件并建立当前对话的检索索引...";
+    } else if (state.workspace.loading) {
+      elements.workspacePanelMeta.textContent = "正在加载当前对话的工作区文件...";
+    } else {
+      elements.workspacePanelMeta.textContent =
+        `当前对话已挂载 ${state.workspace.files.length} 个文件，可用于检索回答。支持 txt / md / pdf / docx / csv / xlsx / json。`;
+    }
+  }
+
+  if (elements.workspaceUploadButton) {
+    elements.workspaceUploadButton.disabled =
+      !canUseWorkspace || state.loading || state.workspace.loading || state.workspace.uploading;
+  }
+
+  if (elements.workspaceFileInput) {
+    elements.workspaceFileInput.disabled =
+      !canUseWorkspace || state.loading || state.workspace.loading || state.workspace.uploading;
+  }
+
+  if (elements.workspaceBanner) {
+    elements.workspaceBanner.className = "inline-banner";
+    elements.workspaceBanner.hidden = !state.workspace.bannerMessage;
+
+    if (state.workspace.bannerTone) {
+      elements.workspaceBanner.classList.add(state.workspace.bannerTone);
+    }
+
+    elements.workspaceBanner.textContent = state.workspace.bannerMessage;
+  }
+
+  elements.workspaceFileList.innerHTML = "";
+
+  if (!canUseWorkspace) {
+    const empty = document.createElement("div");
+    empty.className = "workspace-file-empty";
+    empty.textContent = state.adminAuth.authenticated
+      ? "当前没有可用对话。"
+      : "登录后即可为每个对话建立独立工作区，并让回答基于工作区文件进行检索。";
+    elements.workspaceFileList.appendChild(empty);
+    return;
+  }
+
+  if (state.workspace.loading) {
+    const empty = document.createElement("div");
+    empty.className = "workspace-file-empty";
+    empty.textContent = "正在加载工作区文件...";
+    elements.workspaceFileList.appendChild(empty);
+    return;
+  }
+
+  if (!state.workspace.files.length) {
+    const empty = document.createElement("div");
+    empty.className = "workspace-file-empty";
+    empty.textContent = "当前对话还没有工作区文件。上传后，模型会优先检索这些文件来回答问题。";
+    elements.workspaceFileList.appendChild(empty);
+    return;
+  }
+
+  for (const file of state.workspace.files) {
+    const item = document.createElement("article");
+    item.className = "workspace-file-item";
+
+    const main = document.createElement("div");
+    main.className = "workspace-file-main";
+
+    const title = document.createElement("p");
+    title.className = "workspace-file-title";
+    title.textContent = file.name || "未命名文件";
+
+    const meta = document.createElement("div");
+    meta.className = "workspace-file-meta";
+
+    const size = document.createElement("span");
+    size.textContent = formatWorkspaceFileSize(file.size);
+
+    const extension = document.createElement("span");
+    extension.textContent = String(file.extension || "").replace(/^\./, "").toUpperCase() || "FILE";
+
+    const chunks = document.createElement("span");
+    chunks.textContent = `${Math.max(0, Number(file.chunkCount) || 0)} 段索引`;
+
+    const time = document.createElement("span");
+    time.textContent = formatRelativeTime(file.uploadedAt);
+
+    meta.append(size, extension, chunks, time);
+    main.append(title, meta);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "workspace-file-delete";
+    deleteButton.innerHTML = iconMarkup.delete;
+    deleteButton.setAttribute("aria-label", `删除工作区文件 ${file.name || "未命名文件"}`);
+    deleteButton.title = "删除工作区文件";
+    deleteButton.disabled = state.loading || state.workspace.loading || state.workspace.uploading;
+    deleteButton.addEventListener("click", async () => {
+      await deleteWorkspaceFileFromPanel(file);
+    });
+
+    item.append(main, deleteButton);
+    elements.workspaceFileList.appendChild(item);
+  }
+}
+
+async function ensureWorkspaceConversationReady() {
+  const activeConversation = getActiveConversation();
+
+  if (!activeConversation?.id) {
+    throw new Error("当前没有可用对话。");
+  }
+
+  const saved = await flushRemoteConversationSave();
+
+  if (!saved) {
+    throw new Error("当前对话同步失败，请稍后再试。");
+  }
+
+  return activeConversation;
+}
+
+async function loadWorkspaceFilesForActiveConversation(options = {}) {
+  const activeConversation = getActiveConversation();
+
+  if (!state.adminAuth.authenticated || !activeConversation?.id) {
+    state.workspace.files = [];
+    state.workspace.loading = false;
+    state.workspace.lastConversationId = activeConversation?.id || "";
+
+    if (!options.preserveBanner) {
+      setWorkspaceBanner("", "");
+    }
+
+    renderWorkspacePanel();
+    return;
+  }
+
+  const conversationId = activeConversation.id;
+  state.workspace.loading = true;
+  state.workspace.lastConversationId = conversationId;
+
+  if (!options.preserveBanner) {
+    setWorkspaceBanner("", "");
+  }
+
+  renderWorkspacePanel();
+
+  try {
+    const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/workspace/files`);
+    const payload = await response.json();
+
+    if (response.status === 401) {
+      state.workspace.loading = false;
+      handleAdminUnauthorized("登录已失效，请重新登录。");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(parseErrorPayload(payload, "加载工作区文件失败。"));
+    }
+
+    if (getActiveConversation()?.id !== conversationId) {
+      return;
+    }
+
+    state.workspace.files = Array.isArray(payload.files) ? payload.files : [];
+    state.workspace.loading = false;
+    renderWorkspacePanel();
+  } catch (error) {
+    if (getActiveConversation()?.id === conversationId) {
+      state.workspace.files = [];
+      state.workspace.loading = false;
+      setWorkspaceBanner(error.message || "加载工作区文件失败。", "warning");
+      renderWorkspacePanel();
+    }
+  }
+}
+
+async function handleWorkspaceFileInputChange(event) {
+  const files = Array.from(event.target?.files || []);
+
+  if (!files.length) {
+    return;
+  }
+
+  if (!requireUserAccess()) {
+    if (elements.workspaceFileInput) {
+      elements.workspaceFileInput.value = "";
+    }
+    return;
+  }
+
+  try {
+    const activeConversation = await ensureWorkspaceConversationReady();
+    const formData = new FormData();
+
+    for (const file of files) {
+      formData.append("files", file);
+    }
+
+    state.workspace.uploading = true;
+    setWorkspacePanelOpen(true);
+    setWorkspaceBanner(`正在上传 ${files.length} 个工作区文件...`, "");
+    renderWorkspacePanel();
+
+    const response = await fetch(`/api/conversations/${encodeURIComponent(activeConversation.id)}/workspace/files`, {
+      method: "POST",
+      body: formData
+    });
+    const payload = await response.json();
+
+    if (response.status === 401) {
+      handleAdminUnauthorized("登录已失效，请重新登录。");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(parseErrorPayload(payload, "上传工作区文件失败。"));
+    }
+
+    if (getActiveConversation()?.id !== activeConversation.id) {
+      return;
+    }
+
+    state.workspace.files = Array.isArray(payload.files) ? payload.files : [];
+    state.workspace.uploading = false;
+
+    const uploaded = Array.isArray(payload.uploaded) ? payload.uploaded : [];
+    const failed = Array.isArray(payload.failed) ? payload.failed : [];
+
+    if (failed.length && uploaded.length) {
+      setWorkspaceBanner(`已上传 ${uploaded.length} 个文件，另有 ${failed.length} 个失败。`, "warning");
+    } else if (failed.length) {
+      setWorkspaceBanner(failed[0]?.message || "上传工作区文件失败。", "warning");
+    } else {
+      setWorkspaceBanner(payload.message || `已上传 ${uploaded.length} 个工作区文件。`, "success");
+    }
+  } catch (error) {
+    state.workspace.uploading = false;
+    setWorkspaceBanner(error.message || "上传工作区文件失败。", "warning");
+  } finally {
+    state.workspace.uploading = false;
+
+    if (elements.workspaceFileInput) {
+      elements.workspaceFileInput.value = "";
+    }
+
+    renderWorkspacePanel();
+  }
+}
+
+async function deleteWorkspaceFileFromPanel(file) {
+  const targetTitle = truncateText(file?.name || "该工作区文件", 24) || "该工作区文件";
+  const confirmed = await requestDeleteConfirmation(targetTitle, {
+    dialogTitle: "删除工作区文件？",
+    dialogMessage: `确认删除“${targetTitle}”吗？删除后它将不再参与当前对话的检索回答。`,
+    fallbackTitle: "该工作区文件"
+  });
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const activeConversation = await ensureWorkspaceConversationReady();
+    state.workspace.loading = true;
+    setWorkspaceBanner("", "");
+    renderWorkspacePanel();
+
+    const response = await fetch(
+      `/api/conversations/${encodeURIComponent(activeConversation.id)}/workspace/files/${encodeURIComponent(file.id)}`,
+      {
+        method: "DELETE"
+      }
+    );
+    const payload = await response.json();
+
+    if (response.status === 401) {
+      handleAdminUnauthorized("登录已失效，请重新登录。");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(parseErrorPayload(payload, "删除工作区文件失败。"));
+    }
+
+    if (getActiveConversation()?.id !== activeConversation.id) {
+      return;
+    }
+
+    state.workspace.files = Array.isArray(payload.files) ? payload.files : [];
+    state.workspace.loading = false;
+    setWorkspaceBanner(payload.message || "工作区文件已删除。", "success");
+  } catch (error) {
+    state.workspace.loading = false;
+    setWorkspaceBanner(error.message || "删除工作区文件失败。", "warning");
+  } finally {
+    state.workspace.loading = false;
+    renderWorkspacePanel();
+  }
+}
+
 function setConversationModel(modelId) {
   const activeConversation = getActiveConversation();
 
@@ -219,6 +578,8 @@ function setActiveConversation(conversationId) {
   enableChatAutoFollow();
   renderMessages({ forceScroll: true });
   setSidebarTab("conversations");
+  setWorkspaceBanner("", "");
+  void loadWorkspaceFilesForActiveConversation();
 }
 
 function createNewConversation() {
@@ -243,6 +604,8 @@ function createNewConversation() {
   setSidebarTab("conversations");
   elements.userInput.value = "";
   autoResizeComposer();
+  setWorkspaceBanner("", "");
+  void loadWorkspaceFilesForActiveConversation();
 }
 
 async function loadServerConfig() {
@@ -863,6 +1226,7 @@ async function sendMessage(event) {
 
   const requestPayload = {
     model: activeConversation.modelId,
+    conversationId: activeConversation.id,
     temperature: clampTemperature(activeConversation.temperature),
     messages: buildRequestMessages(),
     webEnabled: Boolean(state.webSearchFeatureEnabled && state.webSearchEnabled)
@@ -1524,11 +1888,16 @@ function setLoading(isLoading) {
   if (elements.imageUploadButton) {
     elements.imageUploadButton.disabled = isLoading;
   }
+  if (elements.workspaceUploadButton) {
+    elements.workspaceUploadButton.disabled =
+      isLoading || state.workspace.uploading || !state.adminAuth.authenticated;
+  }
   setConfigButtonsState();
   renderConversationList();
   renderModelList();
   renderModelSelect();
   renderImageGenerationControls();
+  renderWorkspacePanel();
 
   if (isLoading) {
     elements.sendButton.disabled = !state.adminAuth.authenticated;
@@ -1558,6 +1927,7 @@ async function bootstrap() {
   renderImageGenerationResults();
   renderModelList();
   renderMessages();
+  renderWorkspacePanel();
   updateSelectedModelView();
   renderConfigSummary();
   renderTestResult();
@@ -1565,6 +1935,7 @@ async function bootstrap() {
   autoResizeComposer();
   setConfigButtonsState();
   setWebSearchEnabled(state.webSearchEnabled, { persist: false });
+  await loadWorkspaceFilesForActiveConversation();
 
   elements.temperatureRange.addEventListener("input", () => {
     const activeConversation = getActiveConversation();
@@ -1629,6 +2000,19 @@ async function bootstrap() {
   }
   if (elements.imageUploadInput) {
     elements.imageUploadInput.addEventListener("change", handleImageUploadInputChange);
+  }
+  if (elements.workspacePanelToggleButton) {
+    elements.workspacePanelToggleButton.addEventListener("click", () => {
+      setWorkspacePanelOpen(!state.workspace.panelOpen);
+    });
+  }
+  if (elements.workspaceUploadButton && elements.workspaceFileInput) {
+    elements.workspaceUploadButton.addEventListener("click", () => {
+      elements.workspaceFileInput.click();
+    });
+  }
+  if (elements.workspaceFileInput) {
+    elements.workspaceFileInput.addEventListener("change", handleWorkspaceFileInputChange);
   }
   if (elements.webSearchToggleButton) {
     elements.webSearchToggleButton.addEventListener("click", () => {
@@ -2244,6 +2628,7 @@ async function sendMessage(event) {
   const requestPayload = {
     model: activeConversation.modelId,
     sourceApiId: activeConversation.sourceApiId,
+    conversationId: activeConversation.id,
     temperature: clampTemperature(activeConversation.temperature),
     messages: buildRequestMessages(),
     webEnabled: Boolean(state.webSearchFeatureEnabled && state.webSearchEnabled)
