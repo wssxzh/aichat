@@ -165,6 +165,7 @@ const iconMarkup = {
 
 const storedWebSearchPreference = readStorageItem(storageKeys.webSearchEnabled);
 const storedWorkspacePanelPreference = readStorageItem(storageKeys.workspacePanelOpen);
+const isMobileViewport = window.innerWidth <= 768;
 
 const state = {
   apiBaseUrl: "",
@@ -187,7 +188,7 @@ const state = {
   webSearchPreferenceSynced: storedWebSearchPreference !== null,
   webSearchFeatureEnabled: true,
   workspace: {
-    panelOpen: storedWorkspacePanelPreference !== "0",
+    panelOpen: storedWorkspacePanelPreference === "1" || (storedWorkspacePanelPreference !== "0" && !isMobileViewport),
     files: [],
     loading: false,
     uploading: false,
