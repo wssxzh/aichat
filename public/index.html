@@ -107,6 +107,7 @@
         </footer>
       </aside>
       <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+      <div id="workspacePanelBackdrop" class="workspace-panel-backdrop" hidden></div>
 
       <main class="workspace">
         <button
@@ -179,6 +180,18 @@
                   multiple
                   hidden
                 />
+                <button
+                  id="workspacePanelCloseButton"
+                  class="icon-button workspace-panel-close-button"
+                  type="button"
+                  title="隐藏工作区文件"
+                  aria-label="隐藏工作区文件"
+                  hidden
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M9 6l6 6-6 6" />
+                  </svg>
+                </button>
                 <button id="workspaceUploadButton" class="chip-button" type="button" title="上传工作区文件">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 16V6" />

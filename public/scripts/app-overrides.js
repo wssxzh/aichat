@@ -632,6 +632,7 @@ function setSidebarTab(tab, options = {}) {
   }
 
   renderSidebarNavigation();
+  renderWorkspacePanel();
 
   if (state.activeSidebarTab === "images") {
     renderImageGenerationControls();

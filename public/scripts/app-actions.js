@@ -201,8 +201,16 @@ function setWorkspaceBanner(message = "", tone = "") {
   state.workspace.bannerTone = tone === "success" || tone === "warning" ? tone : "";
 }
 
+function isWorkspacePanelOverlayViewport() {
+  return window.matchMedia("(max-width: 1160px)").matches;
+}
+
 function setWorkspacePanelOpen(open, options = {}) {
   state.workspace.panelOpen = Boolean(open);
+
+  if (state.workspace.panelOpen && isWorkspacePanelOverlayViewport()) {
+    closeMobileSidebarIfNeeded();
+  }
 
   if (options.persist !== false) {
     writeStorageItem(storageKeys.workspacePanelOpen, state.workspace.panelOpen ? "1" : "0");
@@ -222,6 +230,8 @@ function renderWorkspacePanel() {
 
   const activeConversation = getActiveConversation();
   const canUseWorkspace = Boolean(state.adminAuth.authenticated && activeConversation);
+  const isOverlayViewport = isWorkspacePanelOverlayViewport();
+  const isChatWorkspaceVisible = Boolean(elements.chatWorkspace && !elements.chatWorkspace.hidden);
 
   elements.workspacePanel.classList.toggle("collapsed", !state.workspace.panelOpen);
   if (elements.chatWorkspace instanceof HTMLElement) {
@@ -234,6 +244,11 @@ function renderWorkspacePanel() {
     "aria-label",
     state.workspace.panelOpen ? "隐藏工作区文件" : "显示工作区文件"
   );
+
+  if (elements.workspacePanelCloseButton) {
+    elements.workspacePanelCloseButton.hidden = !isOverlayViewport;
+    elements.workspacePanelCloseButton.disabled = !state.workspace.panelOpen;
+  }
 
   if (elements.workspacePanelMeta) {
     if (!state.adminAuth.authenticated) {
@@ -269,6 +284,19 @@ function renderWorkspacePanel() {
     }
 
     elements.workspaceBanner.textContent = state.workspace.bannerMessage;
+  }
+
+  if (elements.workspacePanelBackdrop) {
+    elements.workspacePanelBackdrop.hidden = !(isOverlayViewport && state.workspace.panelOpen && isChatWorkspaceVisible);
+  }
+
+  document.body.classList.toggle(
+    "workspace-panel-mobile-locked",
+    isOverlayViewport && state.workspace.panelOpen && isChatWorkspaceVisible
+  );
+
+  if (typeof syncSidebarToggleButtons === "function") {
+    syncSidebarToggleButtons();
   }
 
   elements.workspaceFileList.innerHTML = "";
@@ -1438,6 +1466,11 @@ async function bootstrap() {
   elements.sidebarBackdrop.addEventListener("click", () => {
     setMobileSidebarOpen(false);
   });
+  if (elements.workspacePanelBackdrop) {
+    elements.workspacePanelBackdrop.addEventListener("click", () => {
+      setWorkspacePanelOpen(false);
+    });
+  }
   elements.recentList.addEventListener("scroll", handleRecentListScroll);
   elements.conversationNavButton.addEventListener("click", () => {
     setSidebarTab("conversations");
@@ -1553,10 +1586,18 @@ async function bootstrap() {
     }
   });
   window.addEventListener("pointerdown", handleGlobalPointerDown);
-  window.addEventListener("resize", applySidebarLayoutState);
+  window.addEventListener("resize", () => {
+    applySidebarLayoutState();
+    renderWorkspacePanel();
+  });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.sidebarUi.mobileOpen && isMobileSidebarViewport()) {
       setMobileSidebarOpen(false);
+      return;
+    }
+
+    if (event.key === "Escape" && state.workspace.panelOpen && isWorkspacePanelOverlayViewport()) {
+      setWorkspacePanelOpen(false);
       return;
     }
 
@@ -2006,6 +2047,11 @@ async function bootstrap() {
       setWorkspacePanelOpen(!state.workspace.panelOpen);
     });
   }
+  if (elements.workspacePanelCloseButton) {
+    elements.workspacePanelCloseButton.addEventListener("click", () => {
+      setWorkspacePanelOpen(false);
+    });
+  }
   if (elements.workspaceUploadButton && elements.workspaceFileInput) {
     elements.workspaceUploadButton.addEventListener("click", () => {
       elements.workspaceFileInput.click();
@@ -2029,6 +2075,11 @@ async function bootstrap() {
   elements.sidebarBackdrop.addEventListener("click", () => {
     setMobileSidebarOpen(false);
   });
+  if (elements.workspacePanelBackdrop) {
+    elements.workspacePanelBackdrop.addEventListener("click", () => {
+      setWorkspacePanelOpen(false);
+    });
+  }
   elements.recentList.addEventListener("scroll", handleRecentListScroll);
   elements.conversationNavButton.addEventListener("click", () => {
     setSidebarTab("conversations");
@@ -2149,10 +2200,18 @@ async function bootstrap() {
     }
   });
   window.addEventListener("pointerdown", handleGlobalPointerDown);
-  window.addEventListener("resize", applySidebarLayoutState);
+  window.addEventListener("resize", () => {
+    applySidebarLayoutState();
+    renderWorkspacePanel();
+  });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.sidebarUi.mobileOpen && isMobileSidebarViewport()) {
       setMobileSidebarOpen(false);
+      return;
+    }
+
+    if (event.key === "Escape" && state.workspace.panelOpen && isWorkspacePanelOverlayViewport()) {
+      setWorkspacePanelOpen(false);
       return;
     }
 

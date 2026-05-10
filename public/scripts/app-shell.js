@@ -39,6 +39,7 @@ const elements = {
   appShell: document.getElementById("appShell"),
   sidebar: document.querySelector(".sidebar"),
   sidebarBackdrop: document.getElementById("sidebarBackdrop"),
+  workspacePanelBackdrop: document.getElementById("workspacePanelBackdrop"),
   sidebarCollapseButton: document.getElementById("sidebarCollapseButton"),
   sidebarMobileButton: document.getElementById("sidebarMobileButton"),
   conversationNavButton: document.getElementById("conversationNavButton"),
@@ -68,6 +69,7 @@ const elements = {
   imagePreviewImage: document.getElementById("imagePreviewImage"),
   imagePreviewCloseButton: document.getElementById("imagePreviewCloseButton"),
   workspacePanelToggleButton: document.getElementById("workspacePanelToggleButton"),
+  workspacePanelCloseButton: document.getElementById("workspacePanelCloseButton"),
   workspacePanel: document.getElementById("workspacePanel"),
   workspacePanelMeta: document.getElementById("workspacePanelMeta"),
   workspaceFileInput: document.getElementById("workspaceFileInput"),
@@ -290,6 +292,7 @@ function syncSidebarToggleButtons() {
   const isMobile = isMobileSidebarViewport();
   const collapsed = Boolean(state.sidebarUi.collapsed);
   const mobileOpen = Boolean(state.sidebarUi.mobileOpen);
+  const workspaceOverlayOpen = isMobile && Boolean(state.workspace?.panelOpen);
   const expanded = isMobile ? mobileOpen : !collapsed;
 
   if (elements.sidebarCollapseButton) {
@@ -302,7 +305,7 @@ function syncSidebarToggleButtons() {
   }
 
   if (elements.sidebarMobileButton) {
-    elements.sidebarMobileButton.hidden = !(isMobile && !mobileOpen);
+    elements.sidebarMobileButton.hidden = !(isMobile && !mobileOpen && !workspaceOverlayOpen);
     elements.sidebarMobileButton.setAttribute("aria-expanded", String(mobileOpen));
     elements.sidebarMobileButton.setAttribute(
       "aria-label",
@@ -377,6 +380,10 @@ function setSidebarCollapsed(collapsed, options = {}) {
 }
 
 function setMobileSidebarOpen(open) {
+  if (Boolean(open) && isMobileSidebarViewport() && state.workspace?.panelOpen && typeof setWorkspacePanelOpen === "function") {
+    setWorkspacePanelOpen(false);
+  }
+
   state.sidebarUi.mobileOpen = Boolean(open);
   applySidebarLayoutState();
 }
@@ -4575,10 +4582,29 @@ function renderConversationList(options = {}) {
     typeof preserveScrollTop === "number" ? preserveScrollTop : elements.recentList.scrollTop;
   syncRecentListWindow(conversations);
   const visibleConversations = conversations.slice(0, state.recentList.loadedCount);
+  const pinnedConversations = visibleConversations.filter((conversation) => conversation.pinned);
+  const regularConversations = visibleConversations.filter((conversation) => !conversation.pinned);
+  const conversationListHeading = document.querySelector("#conversationSection .conversation-list-header h2");
 
   elements.recentList.innerHTML = "";
 
-  for (const conversation of visibleConversations) {
+  if (conversationListHeading) {
+    conversationListHeading.textContent = pinnedConversations.length
+      ? "\u7f6e\u9876\u5bf9\u8bdd"
+      : "\u6700\u8fd1\u5bf9\u8bdd";
+  }
+
+  const appendRecentSectionHeader = (title) => {
+    const sectionHeader = document.createElement("div");
+    sectionHeader.className = "conversation-list-header recent-section-header";
+
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    sectionHeader.appendChild(heading);
+    elements.recentList.appendChild(sectionHeader);
+  };
+
+  const renderConversationRow = (conversation) => {
     const row = document.createElement("div");
     row.className = `recent-row${conversation.id === state.activeConversationId ? " active" : ""}${
       conversation.pinned ? " pinned" : ""
@@ -4687,6 +4713,18 @@ function renderConversationList(options = {}) {
 
     row.append(button, menuWrap);
     elements.recentList.appendChild(row);
+  };
+
+  for (const conversation of pinnedConversations) {
+    renderConversationRow(conversation);
+  }
+
+  if (pinnedConversations.length && regularConversations.length) {
+    appendRecentSectionHeader("\u6700\u8fd1\u5bf9\u8bdd");
+  }
+
+  for (const conversation of regularConversations) {
+    renderConversationRow(conversation);
   }
 
   const maxScrollTop = Math.max(0, elements.recentList.scrollHeight - elements.recentList.clientHeight);
@@ -5204,6 +5242,7 @@ function setSidebarTab(tab, options = {}) {
   }
 
   renderSidebarNavigation();
+  renderWorkspacePanel();
 
   if (state.activeSidebarTab === "images") {
     renderImageGenerationControls();
