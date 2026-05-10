@@ -21,6 +21,7 @@
 - 多接口模型配置
 - 聊天与图片生成
 - 会话持久化
+- 工作区文件上传与检索增强
 - 联网搜索增强
 
 ## 前置条件
@@ -129,6 +130,7 @@ curl -fsS http://127.0.0.1:3000/healthz
 | `USERS_CONFIG_PATH` | `/data/runtime-users.json` |
 | `ANNOUNCEMENTS_CONFIG_PATH` | `/data/runtime-announcements.json` |
 | `CONVERSATIONS_CONFIG_PATH` | `/data/runtime-conversations.json` |
+| `WORKSPACES_ROOT_DIR` | `/data/workspaces` |
 
 如果需要调优联网搜索，可继续配置：
 
@@ -139,6 +141,15 @@ curl -fsS http://127.0.0.1:3000/healthz
 - `WEB_SEARCH_PAGE_TIMEOUT_MS`
 - `WEB_SEARCH_MIN_SCORE`
 - `WEB_SEARCH_FAILURE_NOTICE_ENABLED`
+
+如果需要调优工作区文件功能，可继续配置：
+
+- `MAX_WORKSPACE_FILES_PER_CONVERSATION`
+- `MAX_WORKSPACE_FILE_SIZE_BYTES`
+- `WORKSPACE_CHUNK_SIZE`
+- `WORKSPACE_CHUNK_OVERLAP`
+- `WORKSPACE_SEARCH_RESULT_COUNT`
+- `WORKSPACE_CONTEXT_MAX_LENGTH`
 
 ## 图片与请求体注意事项
 
@@ -161,6 +172,22 @@ curl -fsS http://127.0.0.1:3000/healthz
 - 反向代理的请求体限制
 - 磁盘容量与备份策略
 
+## 工作区文件注意事项
+
+工作区文件功能会占用磁盘空间，需要注意：
+
+- 文件存储位置：`/data/workspaces/`
+- 每个对话最多 `20` 个文件
+- 单个文件最大 `10MB`
+- 支持的格式：`.txt`、`.md`、`.pdf`、`.docx`、`.csv`、`.xlsx`、`.xls`、`.json`
+- 删除对话时会自动清理关联的工作区文件
+
+生产环境建议：
+
+- 定期监控 `/data/workspaces/` 目录大小
+- 根据用户量和使用频率规划磁盘容量
+- 备份时需要包含 `workspaces` 目录
+
 ## 数据持久化
 
 ### 默认卷
@@ -178,10 +205,12 @@ curl -fsS http://127.0.0.1:3000/healthz
 - `runtime-users.json`
 - `runtime-announcements.json`
 - `runtime-conversations.json`
+- `workspaces/`（工作区文件目录）
 
 说明：
 
 - 聊天会话、用户、公告和接口配置都会保存在这里
+- 工作区文件按用户和对话隔离存储
 - 图片生成结果不会作为本地文件写入 `/data`
 
 ## 上线后检查清单
@@ -197,6 +226,8 @@ curl -fsS http://127.0.0.1:3000/healthz
 - 聊天接口可用
 - 流式聊天可用
 - 图片生成可用
+- 工作区文件上传可用
+- 工作区文件检索增强可用
 - 公告管理可用
 - 登录用户刷新页面后会话仍在
 - 如果启用了联网搜索，`/api/web-search/status` 返回 `connected: true`
@@ -218,6 +249,8 @@ docker compose logs --tail=200 ai-chat-web
 - 普通聊天
 - 流式聊天
 - 图片生成
+- 工作区文件上传
+- 工作区文件检索
 - 联网搜索
 
 ## 回滚流程
@@ -362,6 +395,50 @@ curl -b "<cookie>" "http://127.0.0.1:3000/api/web-search/status?q=https://github
 
 如果返回来源里包含 `github-api`，说明直连解析已经生效。
 
+## 工作区文件验证
+
+### 验证文件上传
+
+登录后携带 Cookie，上传一个测试文件：
+
+```bash
+curl -b "<cookie>" \
+  -X POST \
+  -F "files=@/path/to/test.txt" \
+  "http://127.0.0.1:3000/api/conversations/test-conversation/workspace/files"
+```
+
+期望结果：
+
+- 返回 `201` 状态码
+- 响应包含 `uploaded` 数组
+- 响应包含 `files` 数组
+
+### 验证文件列表
+
+```bash
+curl -b "<cookie>" \
+  "http://127.0.0.1:3000/api/conversations/test-conversation/workspace/files"
+```
+
+期望结果：
+
+- 返回 `200` 状态码
+- 响应包含 `files` 数组
+
+### 验证文件删除
+
+```bash
+curl -b "<cookie>" \
+  -X DELETE \
+  "http://127.0.0.1:3000/api/conversations/test-conversation/workspace/files/<file-id>"
+```
+
+期望结果：
+
+- 返回 `200` 状态码
+- 响应包含 `message` 字段
+
 ## 常见问题排查
 
 ### 1. 容器反复重启
@@ -389,7 +466,7 @@ docker compose logs --tail=200 searxng
 
 - `API_BASE_URL`
 - `API_KEY`
-- 管理页里的“测试连通性”
+- 管理页里的"测试连通性"
 - 容器是否能访问上游接口
 
 ### 3. 登录后立刻失效
@@ -435,6 +512,26 @@ chmod -R u+rwX,g+rwX data
 - `/api/web-search/status` 返回的错误细节
 - `ai-chat-web` 日志中是否有 `SearXNG web search failed`
 
+### 7. 工作区文件上传失败
+
+依次检查：
+
+- 文件格式是否支持（`.txt`、`.md`、`.pdf`、`.docx`、`.csv`、`.xlsx`、`.xls`、`.json`）
+- 文件大小是否超过 `MAX_WORKSPACE_FILE_SIZE_BYTES`
+- 当前对话文件数是否超过 `MAX_WORKSPACE_FILES_PER_CONVERSATION`
+- 单次上传文件数是否超过 `MAX_WORKSPACE_FILES_PER_REQUEST`
+- `/data/workspaces/` 目录权限是否正确
+- 磁盘空间是否充足
+
+### 8. 工作区文件检索不生效
+
+依次检查：
+
+- 文件是否成功上传（`/api/conversations/:id/workspace/files` 返回文件列表）
+- 文件是否包含可提取的文本内容
+- 对话时是否登录了账号
+- 对话 ID 是否正确
+
 ## 运维建议
 
 - 定期备份 `aichat-data` 数据卷
@@ -449,6 +546,7 @@ chmod -R u+rwX,g+rwX data
   - `ai-chat-web` 日志
   - `searxng` 日志
   - `/data/runtime-conversations.json` 的体积
+  - `/data/workspaces/` 目录的体积
 
 ## 命令速查
 

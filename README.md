@@ -1,12 +1,13 @@
 # AI Chat
 
-一个基于 `Node.js + Express + 原生前端` 的 AI 对话与图片生成项目，内置用户系统、管理员后台、多接口模型配置、会话持久化、公告管理，以及可选的联网搜索能力。
+一个基于 `Node.js + Express + 原生前端` 的 AI 对话与图片生成项目，内置用户系统、管理员后台、多接口模型配置、会话持久化、公告管理、工作区文件检索增强，以及可选的联网搜索能力。
 
-项目当前的设计重点有三件事：
+项目当前的设计重点有四件事：
 
 - 尽量保持部署简单，不依赖数据库即可运行
 - 让管理员可以在页面内直接维护模型接口配置
 - 同时支持聊天、图文消息和图片生成
+- 支持工作区文件上传与检索增强
 
 ## 功能概览
 
@@ -19,6 +20,7 @@
 - 管理员可在模型中心维护多个上游 API 接口
 - 接口支持启用/禁用，测试连通性时只测试启用接口
 - 管理员可管理用户与公告
+- 工作区文件上传与检索增强
 - 可选联网搜索增强，支持 GitHub 仓库直连解析和 SearXNG 搜索
 
 ## 当前行为说明
@@ -34,13 +36,23 @@
 ### 图片生成
 
 - 图片生成页未登录也可以查看
-- 真正点击“生成图片”时需要登录
+- 真正点击"生成图片"时需要登录
 - 可从当前启用接口中识别可用的生图模型
-- 生图模型按“接口来源 + 模型 ID”区分，不会再强制切回默认模型
+- 生图模型按"接口来源 + 模型 ID"区分，不会再强制切回默认模型
 - 图片结果目前不会落盘到本地文件
   - 上游如果返回远程 URL，前端直接使用远程 URL 展示
   - 上游如果返回 `b64_json`，服务端会转成 `data URL` 后返回前端
 - 图片生成结果只保存在当前前端运行期的账户隔离会话里，不写入服务端会话文件
+
+### 工作区文件
+
+- 工作区文件按对话隔离，每个对话最多上传 `20` 个文件
+- 支持的文件格式：`.txt`、`.md`、`.markdown`、`.pdf`、`.docx`、`.csv`、`.xlsx`、`.xls`、`.json`
+- 单个文件最大 `10MB`
+- 上传后自动提取文本内容并分块
+- 对话时自动检索工作区文件内容，注入到系统提示词中
+- 检索基于关键词匹配，支持中文分词
+- 删除对话时会自动清理关联的工作区文件
 
 ### 模型中心
 
@@ -55,12 +67,22 @@
   - `https://example.com/v1`
   - `https://example.com/v3`
 
+### 联网搜索
+
+- 服务端总开关：`WEB_SEARCH_SERVER_ENABLED`
+- 前端默认状态：`WEB_SEARCH_DEFAULT_ENABLED`
+- 支持 GitHub 仓库链接直连解析
+- 支持 SearXNG 搜索引擎
+- 搜索结果会自动评分排序
+- 可配置搜索结果数量、超时时间等参数
+
 ## 技术栈
 
 - 服务端：`Node.js 20`、`Express`
 - 前端：原生 `HTML / CSS / JavaScript`
 - Markdown 渲染：`marked`
 - HTML 清洗：`DOMPurify`
+- 文件解析：`mammoth`（docx）、`xlsx`（Excel）、`pdf-parse`（PDF）
 - 配置加载：`dotenv`
 - 部署：`Docker`、`Docker Compose`
 
@@ -71,20 +93,35 @@
 ├─ public/
 │  ├─ index.html
 │  ├─ styles.css
+│  ├─ vendor/
+│  │  ├─ marked.umd.js
+│  │  └─ purify.min.js
 │  └─ scripts/
 │     ├─ app-shell.js
 │     ├─ chat-render.js
 │     ├─ app-actions.js
 │     └─ app-overrides.js
 ├─ searxng/
+│  └─ settings.yml
 ├─ src/
 │  └─ server/
 │     ├─ app.js
 │     ├─ index.js
 │     ├─ config/
+│     │  └─ env.js
 │     ├─ routes/
+│     │  └─ register-api-routes.js
 │     ├─ services/
+│     │  ├─ auth-service.js
+│     │  ├─ chat-service.js
+│     │  ├─ http-service.js
+│     │  ├─ web-search-service.js
+│     │  └─ workspace-search-service.js
 │     └─ stores/
+│        ├─ announcements-store.js
+│        ├─ conversations-store.js
+│        ├─ runtime-config-store.js
+│        └─ workspaces-store.js
 ├─ server.js
 ├─ Dockerfile
 ├─ docker-compose.yml
@@ -165,7 +202,7 @@ curl http://127.0.0.1:3000/healthz
 ```json
 {
   "status": "ok",
-  "timestamp": "2026-05-09T00:00:00.000Z",
+  "timestamp": "2026-05-10T00:00:00.000Z",
   "uptimeSeconds": 12
 }
 ```
@@ -197,7 +234,7 @@ curl http://127.0.0.1:3000/healthz
 | --- | --- | --- |
 | `ADMIN_USERNAME` | 默认管理员用户名 | `admin` |
 | `ADMIN_PASSWORD` | 默认管理员密码 | `demo-admin-password-change-me` |
-| `SESSION_TTL_MS` | 登录会话有效期，单位毫秒 | `28800000` |
+| `SESSION_TTL_MS` | 登录会话有效期，单位毫秒 | `28800000`（8 小时） |
 | `SESSION_COOKIE_SECURE` | 是否只在 HTTPS 下发送 Cookie | 本地常用 `false`，生产建议 `true` |
 
 ### HTTP 与请求体
@@ -216,9 +253,23 @@ curl http://127.0.0.1:3000/healthz
 | `USERS_CONFIG_PATH` | 用户数据文件 | `.runtime-users.json` 或 `/data/runtime-users.json` |
 | `ANNOUNCEMENTS_CONFIG_PATH` | 公告数据文件 | `.runtime-announcements.json` 或 `/data/runtime-announcements.json` |
 | `CONVERSATIONS_CONFIG_PATH` | 会话数据文件 | `.runtime-conversations.json` 或 `/data/runtime-conversations.json` |
+| `WORKSPACES_ROOT_DIR` | 工作区文件根目录 | `data/workspaces` 或 `/data/workspaces` |
 | `MAX_STORED_ANNOUNCEMENTS` | 最多保留公告数量 | `80` |
 | `MAX_STORED_CONVERSATIONS_PER_USER` | 每个用户最多保留会话数量 | `120` |
 | `MAX_MESSAGES_PER_CONVERSATION` | 单个会话最多保留消息数 | `320` |
+
+### 工作区文件
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `MAX_WORKSPACE_FILES_PER_CONVERSATION` | 每个对话最多工作区文件数 | `20` |
+| `MAX_WORKSPACE_FILES_PER_REQUEST` | 单次请求最多上传文件数 | `5` |
+| `MAX_WORKSPACE_FILE_SIZE_BYTES` | 单个文件最大体积 | `10485760`（10MB） |
+| `WORKSPACE_CHUNK_SIZE` | 文本分块大小 | `1100` |
+| `WORKSPACE_CHUNK_OVERLAP` | 分块重叠字符数 | `180` |
+| `WORKSPACE_MAX_CHUNKS_PER_FILE` | 单文件最大分块数 | `80` |
+| `WORKSPACE_SEARCH_RESULT_COUNT` | 检索返回结果数 | `6` |
+| `WORKSPACE_CONTEXT_MAX_LENGTH` | 注入上下文最大长度 | `8000` |
 
 ### 联网搜索
 
@@ -262,12 +313,14 @@ curl http://127.0.0.1:3000/healthz
 - `/data/runtime-users.json`
 - `/data/runtime-announcements.json`
 - `/data/runtime-conversations.json`
+- `/data/workspaces/`（工作区文件目录）
 
 说明：
 
 - 登录用户的聊天会话会写入 `runtime-conversations.json`
 - 游客会话保存在浏览器本地
 - 图片生成结果不写入这些服务端持久化文件
+- 工作区文件保存在 `workspaces` 目录下，按用户和对话隔离
 
 ## 常用命令
 
@@ -313,6 +366,12 @@ npm run docker:down
 - `GET /api/conversations`
 - `PUT /api/conversations`
 
+### 工作区接口
+
+- `GET /api/conversations/:conversationId/workspace/files`
+- `POST /api/conversations/:conversationId/workspace/files`
+- `DELETE /api/conversations/:conversationId/workspace/files/:fileId`
+
 ### 公告接口
 
 - `GET /api/announcements`
@@ -348,6 +407,7 @@ npm run docker:down
   - `EXPRESS_JSON_LIMIT`
   - 反向代理的请求体大小限制
   - 会话持久化文件体积
+- 工作区文件存储需要磁盘空间，请根据使用情况规划容量
 
 ## 部署文档
 
