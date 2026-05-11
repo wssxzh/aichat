@@ -1,0 +1,282 @@
+"use strict";
+
+const fs = require("fs");
+const crypto = require("crypto");
+
+function createConversationsStore(options) {
+  const {
+    conversationsConfigPath,
+    maxStoredConversationsPerUser,
+    maxMessagesPerConversation,
+    maxConversationMessageLength,
+    maxConversationSystemPromptLength,
+    maxConversationTitleLength,
+    onUserConversationsStateSaved
+  } = options;
+  const maxConversationAttachmentsPerMessage = 3;
+  const maxConversationAttachmentUrlLength = 4 * 1024 * 1024;
+
+function clampConversationTemperature(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return 0.7;
+  }
+
+  return Math.min(2, Math.max(0, numeric));
+}
+
+function normalizeConversationFeedback(value) {
+  return value === "like" || value === "dislike" ? value : "";
+}
+
+function normalizeConversationRole(value) {
+  return value === "assistant" ? "assistant" : "user";
+}
+
+function compactConversationText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function sanitizeConversationAttachment(input) {
+  const url = typeof input?.url === "string" ? input.url.trim() : "";
+  const isSupportedUrl = url.startsWith("data:image/") || /^https?:\/\//i.test(url);
+
+  if (!url || !isSupportedUrl) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof input?.id === "string" && input.id.trim()
+        ? input.id.trim().slice(0, 120)
+        : `attachment-${crypto.randomUUID()}`,
+    name:
+      typeof input?.name === "string" && input.name.trim()
+        ? input.name.trim().slice(0, 120)
+        : "图片",
+    mimeType:
+      typeof input?.mimeType === "string" && input.mimeType.trim()
+        ? input.mimeType.trim().slice(0, 120)
+        : "image/*",
+    size: Math.max(0, Number(input?.size) || 0),
+    url: url.slice(0, maxConversationAttachmentUrlLength)
+  };
+}
+
+function deriveConversationTitle(messages) {
+  const firstUserMessage = Array.isArray(messages)
+    ? messages.find((message) => {
+      return (
+        message.role === "user" &&
+        (compactConversationText(message.content) || (Array.isArray(message.attachments) && message.attachments.length))
+      );
+    })
+    : null;
+
+  if (!firstUserMessage) {
+    return "新对话";
+  }
+
+  const sourceText = compactConversationText(firstUserMessage.content);
+
+  if (!sourceText) {
+    return Array.isArray(firstUserMessage.attachments) && firstUserMessage.attachments.length ? "图片对话" : "新对话";
+  }
+
+  return sourceText.length > 24 ? `${sourceText.slice(0, 24)}...` : sourceText;
+}
+
+function sanitizeConversationMessage(input) {
+  const content = String(input?.content || "").slice(0, maxConversationMessageLength);
+  const timestamp = Number(input?.timestamp) || Date.now();
+  const model = typeof input?.model === "string" ? input.model.slice(0, 200) : "";
+  const id = typeof input?.id === "string" && input.id.trim()
+    ? input.id.trim().slice(0, 120)
+    : `message-${crypto.randomUUID()}`;
+
+  return {
+    id,
+    role: normalizeConversationRole(input?.role),
+    content,
+    attachments: Array.isArray(input?.attachments)
+      ? input.attachments.map(sanitizeConversationAttachment).filter(Boolean).slice(0, maxConversationAttachmentsPerMessage)
+      : [],
+    model,
+    sourceApiId:
+      typeof input?.sourceApiId === "string" ? input.sourceApiId.slice(0, 120) : "",
+    timestamp,
+    feedback: normalizeConversationFeedback(input?.feedback),
+    streaming: false
+  };
+}
+
+function sanitizeConversationRecord(input) {
+  const createdAt = Number(input?.createdAt) || Date.now();
+  const messages = Array.isArray(input?.messages)
+    ? input.messages.map(sanitizeConversationMessage).slice(-maxMessagesPerConversation)
+    : [];
+  const title = compactConversationText(input?.title).slice(0, maxConversationTitleLength);
+
+  return {
+    id: typeof input?.id === "string" && input.id.trim()
+      ? input.id.trim().slice(0, 120)
+      : `conversation-${crypto.randomUUID()}`,
+    title: title || deriveConversationTitle(messages),
+    createdAt,
+    updatedAt: Number(input?.updatedAt) || createdAt,
+    modelId: typeof input?.modelId === "string" ? input.modelId.slice(0, 200) : "",
+    sourceApiId: typeof input?.sourceApiId === "string" ? input.sourceApiId.slice(0, 120) : "",
+    systemPrompt: typeof input?.systemPrompt === "string"
+      ? input.systemPrompt.slice(0, maxConversationSystemPromptLength)
+      : "",
+    temperature: clampConversationTemperature(input?.temperature),
+    pinned: Boolean(input?.pinned),
+    messages
+  };
+}
+
+function sortConversations(left, right) {
+  if (Boolean(left?.pinned) !== Boolean(right?.pinned)) {
+    return left?.pinned ? -1 : 1;
+  }
+
+  return Number(right?.updatedAt || 0) - Number(left?.updatedAt || 0);
+}
+
+function sanitizeUserConversationsState(input) {
+  const conversations = Array.isArray(input?.conversations)
+    ? input.conversations.map(sanitizeConversationRecord).sort(sortConversations).slice(0, maxStoredConversationsPerUser)
+    : [];
+  const providedActiveConversationId =
+    typeof input?.activeConversationId === "string" ? input.activeConversationId.trim().slice(0, 120) : "";
+  const resolvedActiveConversationId =
+    conversations.some((conversation) => conversation.id === providedActiveConversationId)
+      ? providedActiveConversationId
+      : conversations[0]?.id || "";
+
+  return {
+    conversations,
+    activeConversationId: resolvedActiveConversationId,
+    updatedAt: Number(input?.updatedAt) || Date.now()
+  };
+}
+
+function readConversationsStore() {
+  if (!fs.existsSync(conversationsConfigPath)) {
+    return {
+      users: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+
+  try {
+    const raw = fs.readFileSync(conversationsConfigPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const nextUsers = {};
+    const usersNode = parsed?.users && typeof parsed.users === "object" ? parsed.users : {};
+
+    for (const [userId, userState] of Object.entries(usersNode)) {
+      const normalizedUserId = String(userId || "").trim();
+
+      if (!normalizedUserId) {
+        continue;
+      }
+
+      nextUsers[normalizedUserId] = sanitizeUserConversationsState(userState);
+    }
+
+    return {
+      users: nextUsers,
+      createdAt: Number(parsed?.createdAt) || Date.now(),
+      updatedAt: Number(parsed?.updatedAt) || Date.now()
+    };
+  } catch (error) {
+    console.warn("Failed to read conversations config:", error);
+    return {
+      users: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+}
+
+let conversationsStore = readConversationsStore();
+
+function persistConversationsStore() {
+  conversationsStore.updatedAt = Date.now();
+
+  fs.writeFileSync(
+    conversationsConfigPath,
+    JSON.stringify(
+      {
+        users: conversationsStore.users,
+        createdAt: conversationsStore.createdAt,
+        updatedAt: conversationsStore.updatedAt
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+}
+
+function getUserConversationsState(userId) {
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!normalizedUserId) {
+    return sanitizeUserConversationsState(null);
+  }
+
+  if (!conversationsStore.users[normalizedUserId]) {
+    conversationsStore.users[normalizedUserId] = sanitizeUserConversationsState(null);
+  }
+
+  return sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+}
+
+function saveUserConversationsState(userId, payload) {
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!normalizedUserId) {
+    const userIdError = new Error("Invalid user id");
+    userIdError.status = 400;
+    throw userIdError;
+  }
+
+  const previousState = sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+  const sanitized = sanitizeUserConversationsState(payload);
+  conversationsStore.users[normalizedUserId] = {
+    ...sanitized,
+    updatedAt: Date.now()
+  };
+  persistConversationsStore();
+
+  const nextState = sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+
+  if (typeof onUserConversationsStateSaved === "function") {
+    try {
+      onUserConversationsStateSaved({
+        userId: normalizedUserId,
+        previousState,
+        nextState
+      });
+    } catch (error) {
+      console.warn("Failed to run conversations post-save hook:", error);
+    }
+  }
+
+  return nextState;
+}
+
+
+  return {
+    conversationsStore,
+    persistConversationsStore,
+    getUserConversationsState,
+    saveUserConversationsState
+  };
+}
+
+module.exports = { createConversationsStore };

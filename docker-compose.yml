@@ -1,0 +1,72 @@
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: aichat-searxng
+    init: true
+    environment:
+      INSTANCE_NAME: ${SEARXNG_INSTANCE_NAME:-aichat-searxng}
+      BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://localhost:8080/}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-this-searxng-secret-key}
+      FORCE_OWNERSHIP: "true"
+    volumes:
+      - ./searxng:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    restart: unless-stopped
+
+  ai-chat-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-chat-web
+    init: true
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      EXPRESS_JSON_LIMIT: ${EXPRESS_JSON_LIMIT:-15mb}
+      API_BASE_URL: ${API_BASE_URL:-https://api.example.com}
+      API_KEY: ${API_KEY:-demo-key-change-me}
+      WEB_SEARCH_SERVER_ENABLED: ${WEB_SEARCH_SERVER_ENABLED:-true}
+      WEB_SEARCH_DEFAULT_ENABLED: ${WEB_SEARCH_DEFAULT_ENABLED:-false}
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
+      SEARXNG_FALLBACK_BASE_URL: ${SEARXNG_FALLBACK_BASE_URL:-}
+      SEARXNG_SEARCH_PATH: ${SEARXNG_SEARCH_PATH:-/search}
+      SEARXNG_RESULT_COUNT: ${SEARXNG_RESULT_COUNT:-5}
+      SEARXNG_TIMEOUT_MS: ${SEARXNG_TIMEOUT_MS:-12000}
+      SEARXNG_USER_AGENT: "${SEARXNG_USER_AGENT:-Mozilla/5.0 (compatible; wssxzh-ai-chat-web/1.0; +https://github.com/wssxzh/aichat)}"
+      GITHUB_API_BASE_URL: ${GITHUB_API_BASE_URL:-https://api.github.com}
+      WEB_SEARCH_DIRECT_URL_ENABLED: ${WEB_SEARCH_DIRECT_URL_ENABLED:-true}
+      WEB_SEARCH_MAX_QUERIES: ${WEB_SEARCH_MAX_QUERIES:-3}
+      WEB_SEARCH_FETCH_PAGE_COUNT: ${WEB_SEARCH_FETCH_PAGE_COUNT:-3}
+      WEB_SEARCH_PAGE_TIMEOUT_MS: ${WEB_SEARCH_PAGE_TIMEOUT_MS:-8000}
+      WEB_SEARCH_MIN_SCORE: ${WEB_SEARCH_MIN_SCORE:-0.12}
+      WEB_SEARCH_FAILURE_NOTICE_ENABLED: ${WEB_SEARCH_FAILURE_NOTICE_ENABLED:-true}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-demo-admin-password-change-me}
+      SESSION_TTL_MS: ${SESSION_TTL_MS:-28800000}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      RUNTIME_CONFIG_PATH: ${RUNTIME_CONFIG_PATH:-/data/runtime-config.json}
+      USERS_CONFIG_PATH: ${USERS_CONFIG_PATH:-/data/runtime-users.json}
+      ANNOUNCEMENTS_CONFIG_PATH: ${ANNOUNCEMENTS_CONFIG_PATH:-/data/runtime-announcements.json}
+      CONVERSATIONS_CONFIG_PATH: ${CONVERSATIONS_CONFIG_PATH:-/data/runtime-conversations.json}
+      MAX_STORED_ANNOUNCEMENTS: ${MAX_STORED_ANNOUNCEMENTS:-80}
+      MAX_STORED_CONVERSATIONS_PER_USER: ${MAX_STORED_CONVERSATIONS_PER_USER:-120}
+    volumes:
+      - aichat-data:/data
+    depends_on:
+      - searxng
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'node -e ''require("http").get("http://127.0.0.1:3000/healthz",(res)=>process.exit(res.statusCode===200?0:1)).on("error",()=>process.exit(1));'''
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  aichat-data:
+  searxng-cache:

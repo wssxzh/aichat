@@ -1,0 +1,2 @@
+# Kept for optional future limiter tuning.
+# Current default in settings.yml sets `server.limiter: false`.

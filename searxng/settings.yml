@@ -1,0 +1,19 @@
+use_default_settings:
+  engines:
+    remove:
+      - ahmia
+      - torch
+      - wikidata
+
+general:
+  instance_name: "aichat-searxng"
+
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "change-this-searxng-secret-key"
+  limiter: false
