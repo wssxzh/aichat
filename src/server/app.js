@@ -37,6 +37,11 @@ function createApp(dependencies) {
     }
 
     console.error(error);
+
+    if (status === 429 && Number(error?.retryAfterMs) > 0) {
+      response.setHeader("Retry-After", String(Math.ceil(Number(error.retryAfterMs) / 1000)));
+    }
+
     response.status(status).json({
       error: "请求失败",
       detail

@@ -15,6 +15,7 @@ const { createWorkspaceSearchService } = require("./services/workspace-search-se
 function createDependencies() {
   const authService = createAuthService({
     usersConfigPath: env.usersConfigPath,
+    sessionsConfigPath: env.sessionsConfigPath,
     defaultAdminUsername: env.defaultAdminUsername,
     defaultAdminPassword: env.defaultAdminPassword,
     sessionCookieName: env.sessionCookieName,
@@ -38,7 +39,7 @@ function createDependencies() {
     maxConversationSystemPromptLength: env.maxConversationSystemPromptLength,
     maxConversationTitleLength: env.maxConversationTitleLength,
     onUserConversationsStateSaved: ({ userId, nextState }) => {
-      workspacesStore.pruneUserWorkspaces(
+      return workspacesStore.pruneUserWorkspaces(
         userId,
         Array.isArray(nextState?.conversations)
           ? nextState.conversations.map((conversation) => conversation.id)

@@ -2,17 +2,13 @@
 
 const fs = require("fs");
 const path = require("path");
+const { ensureParentDirectory, writeFileAtomic } = require("../utils/atomic-file");
 
 function createWorkspacesStore(options) {
   const {
     workspacesRootDir,
     maxWorkspaceFilesPerConversation
   } = options;
-
-  function ensureDirectory(targetPath) {
-    fs.mkdirSync(targetPath, { recursive: true });
-    return targetPath;
-  }
 
   function sanitizePathSegment(value, fallback) {
     const normalized = String(value || "")
@@ -97,15 +93,29 @@ function createWorkspacesStore(options) {
     };
   }
 
-  function readWorkspaceIndex(userId, conversationId) {
+  async function pathExists(targetPath) {
+    try {
+      await fs.promises.access(targetPath);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function ensureDirectory(targetPath) {
+    await fs.promises.mkdir(targetPath, { recursive: true });
+    return targetPath;
+  }
+
+  async function readWorkspaceIndex(userId, conversationId) {
     const indexPath = getWorkspaceIndexPath(userId, conversationId);
 
-    if (!fs.existsSync(indexPath)) {
+    if (!(await pathExists(indexPath))) {
       return createEmptyWorkspaceIndex(userId, conversationId);
     }
 
     try {
-      const raw = fs.readFileSync(indexPath, "utf8");
+      const raw = await fs.promises.readFile(indexPath, "utf8");
       const parsed = JSON.parse(raw);
       return normalizeWorkspaceIndex(userId, conversationId, parsed);
     } catch (error) {
@@ -114,13 +124,14 @@ function createWorkspacesStore(options) {
     }
   }
 
-  function writeWorkspaceIndex(userId, conversationId, input) {
-    const conversationDir = ensureDirectory(getConversationDir(userId, conversationId));
-    ensureDirectory(getFilesDir(userId, conversationId));
+  async function writeWorkspaceIndex(userId, conversationId, input) {
+    const conversationDir = getConversationDir(userId, conversationId);
+    await ensureDirectory(conversationDir);
+    await ensureDirectory(getFilesDir(userId, conversationId));
     const nextIndex = normalizeWorkspaceIndex(userId, conversationId, input);
     nextIndex.updatedAt = Date.now();
 
-    fs.writeFileSync(
+    await writeFileAtomic(
       path.join(conversationDir, "index.json"),
       JSON.stringify(nextIndex, null, 2),
       "utf8"
@@ -129,8 +140,10 @@ function createWorkspacesStore(options) {
     return nextIndex;
   }
 
-  function listWorkspaceFiles(userId, conversationId) {
-    return readWorkspaceIndex(userId, conversationId).files
+  async function listWorkspaceFiles(userId, conversationId) {
+    const index = await readWorkspaceIndex(userId, conversationId);
+
+    return index.files
       .slice()
       .sort((left, right) => Number(right.uploadedAt || 0) - Number(left.uploadedAt || 0));
   }
@@ -139,13 +152,13 @@ function createWorkspacesStore(options) {
     return path.join(getFilesDir(userId, conversationId), storedName);
   }
 
-  function writeWorkspaceFileBuffer(userId, conversationId, fileRecord, buffer) {
-    ensureDirectory(getFilesDir(userId, conversationId));
+  async function writeWorkspaceFileBuffer(userId, conversationId, fileRecord, buffer) {
+    await ensureDirectory(getFilesDir(userId, conversationId));
     const normalizedFile = normalizeWorkspaceFile(fileRecord);
     const storedName = normalizedFile.storedName || `${normalizedFile.id}${normalizedFile.extension || ""}`;
     const filePath = getWorkspaceFilePath(userId, conversationId, storedName);
 
-    fs.writeFileSync(filePath, buffer);
+    await writeFileAtomic(filePath, buffer);
 
     return {
       ...normalizedFile,
@@ -153,84 +166,79 @@ function createWorkspacesStore(options) {
     };
   }
 
-  function removeWorkspaceFileAsset(userId, conversationId, storedName) {
+  async function removeWorkspaceFileAsset(userId, conversationId, storedName) {
     if (!storedName) {
       return;
     }
 
-    const filePath = getWorkspaceFilePath(userId, conversationId, storedName);
-
-    if (fs.existsSync(filePath)) {
-      fs.rmSync(filePath, { force: true });
-    }
+    await fs.promises.rm(getWorkspaceFilePath(userId, conversationId, storedName), { force: true });
   }
 
-  function cleanupWorkspaceArtifacts(userId, conversationId) {
+  async function cleanupWorkspaceArtifacts(userId, conversationId) {
     const conversationDir = getConversationDir(userId, conversationId);
 
-    if (fs.existsSync(conversationDir)) {
-      fs.rmSync(conversationDir, { recursive: true, force: true });
+    if (await pathExists(conversationDir)) {
+      await fs.promises.rm(conversationDir, { recursive: true, force: true });
     }
   }
 
-  function deleteWorkspaceFile(userId, conversationId, fileId) {
-    const currentIndex = readWorkspaceIndex(userId, conversationId);
+  async function deleteWorkspaceFile(userId, conversationId, fileId) {
+    const currentIndex = await readWorkspaceIndex(userId, conversationId);
     const targetFile = currentIndex.files.find((item) => item.id === String(fileId || ""));
 
     if (!targetFile) {
       return null;
     }
 
-    removeWorkspaceFileAsset(userId, conversationId, targetFile.storedName);
+    await removeWorkspaceFileAsset(userId, conversationId, targetFile.storedName);
 
-    const nextIndex = writeWorkspaceIndex(userId, conversationId, {
+    const nextIndex = await writeWorkspaceIndex(userId, conversationId, {
       ...currentIndex,
       files: currentIndex.files.filter((item) => item.id !== targetFile.id),
       chunks: currentIndex.chunks.filter((item) => item.fileId !== targetFile.id)
     });
 
     if (!nextIndex.files.length) {
-      cleanupWorkspaceArtifacts(userId, conversationId);
+      await cleanupWorkspaceArtifacts(userId, conversationId);
     }
 
     return targetFile;
   }
 
-  function deleteWorkspace(userId, conversationId) {
-    cleanupWorkspaceArtifacts(userId, conversationId);
+  async function deleteWorkspace(userId, conversationId) {
+    await cleanupWorkspaceArtifacts(userId, conversationId);
   }
 
-  function deleteUserWorkspaceData(userId) {
+  async function deleteUserWorkspaceData(userId) {
     const userDir = getUserDir(userId);
 
-    if (fs.existsSync(userDir)) {
-      fs.rmSync(userDir, { recursive: true, force: true });
+    if (await pathExists(userDir)) {
+      await fs.promises.rm(userDir, { recursive: true, force: true });
     }
   }
 
-  function pruneUserWorkspaces(userId, allowedConversationIds = []) {
+  async function pruneUserWorkspaces(userId, allowedConversationIds = []) {
     const userDir = getUserDir(userId);
 
-    if (!fs.existsSync(userDir)) {
+    if (!(await pathExists(userDir))) {
       return;
     }
 
     const allowed = new Set(
       allowedConversationIds.map((item) => sanitizePathSegment(item, "conversation")).filter(Boolean)
     );
+    const entries = await fs.promises.readdir(userDir, { withFileTypes: true });
 
-    for (const entry of fs.readdirSync(userDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
+    await Promise.all(entries.map(async (entry) => {
+      if (!entry.isDirectory() || allowed.has(entry.name)) {
+        return;
       }
 
-      if (!allowed.has(entry.name)) {
-        fs.rmSync(path.join(userDir, entry.name), { recursive: true, force: true });
-      }
-    }
+      await fs.promises.rm(path.join(userDir, entry.name), { recursive: true, force: true });
+    }));
   }
 
-  ensureDirectory(workspacesRootDir);
+  fs.mkdirSync(workspacesRootDir, { recursive: true });
 
   return {
     maxWorkspaceFilesPerConversation,

@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const { createQueuedTaskRunner, writeFileAtomic } = require("../utils/atomic-file");
 
 function createAnnouncementsStore(options) {
   const { announcementsConfigPath, maxStoredAnnouncements, normalizeUsername } = options;
@@ -102,26 +103,25 @@ function readAnnouncementsStore() {
 
 let announcementsStore = readAnnouncementsStore();
 
-function persistAnnouncementsStore() {
+function buildAnnouncementsStoreSnapshot() {
+  return {
+    announcements: announcementsStore.announcements,
+    createdAt: announcementsStore.createdAt,
+    updatedAt: announcementsStore.updatedAt
+  };
+}
+
+const persistAnnouncementsStoreQueued = createQueuedTaskRunner(async (snapshot) => {
+  await writeFileAtomic(announcementsConfigPath, JSON.stringify(snapshot, null, 2), "utf8");
+});
+
+async function persistAnnouncementsStore() {
   announcementsStore.updatedAt = Date.now();
   announcementsStore.announcements = announcementsStore.announcements
     .filter(Boolean)
     .sort(sortAnnouncements)
     .slice(0, maxStoredAnnouncements);
-
-  fs.writeFileSync(
-    announcementsConfigPath,
-    JSON.stringify(
-      {
-        announcements: announcementsStore.announcements,
-        createdAt: announcementsStore.createdAt,
-        updatedAt: announcementsStore.updatedAt
-      },
-      null,
-      2
-    ),
-    "utf8"
-  );
+  await persistAnnouncementsStoreQueued(buildAnnouncementsStoreSnapshot());
 }
 
 function toPublicAnnouncement(announcement) {
@@ -165,7 +165,6 @@ function createStoredAnnouncement({ title, content, author }) {
   };
 
   announcementsStore.announcements.unshift(announcement);
-  persistAnnouncementsStore();
 
   return announcement;
 }
@@ -184,7 +183,6 @@ function removeStoredAnnouncement(announcementId) {
   }
 
   const [removed] = announcementsStore.announcements.splice(targetIndex, 1);
-  persistAnnouncementsStore();
 
   return removed;
 }
@@ -192,6 +190,7 @@ function removeStoredAnnouncement(announcementId) {
 
   return {
     announcementsStore,
+    persistAnnouncementsStore,
     listAnnouncements,
     toPublicAnnouncement,
     createStoredAnnouncement,

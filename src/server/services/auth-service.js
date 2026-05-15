@@ -2,10 +2,12 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const { createQueuedTaskRunner, writeFileAtomic } = require("../utils/atomic-file");
 
 function createAuthService(options) {
   const {
     usersConfigPath,
+    sessionsConfigPath,
     defaultAdminUsername,
     defaultAdminPassword,
     sessionCookieName,
@@ -99,13 +101,23 @@ function generateSessionToken() {
   return crypto.randomBytes(32).toString("hex");
 }
 
-function removeExpiredSessions() {
+function pruneExpiredSessions() {
   const now = Date.now();
+  let changed = false;
 
   for (const [token, session] of sessionStore.entries()) {
     if (!session || session.expiresAt <= now) {
       sessionStore.delete(token);
+      changed = true;
     }
+  }
+
+  return changed;
+}
+
+function removeExpiredSessions() {
+  if (pruneExpiredSessions()) {
+    void persistSessionsStore();
   }
 }
 
@@ -220,6 +232,24 @@ function sanitizeLoadedUser(input) {
   };
 }
 
+function sanitizeLoadedSession(input) {
+  const token = typeof input?.token === "string" ? input.token.trim() : "";
+  const userId = typeof input?.userId === "string" ? input.userId.trim() : "";
+  const createdAt = Number(input?.createdAt) || 0;
+  const expiresAt = Number(input?.expiresAt) || 0;
+
+  if (!token || !userId || !createdAt || !expiresAt || expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return {
+    token,
+    userId,
+    createdAt,
+    expiresAt
+  };
+}
+
 function readUsersStore() {
   if (!fs.existsSync(usersConfigPath)) {
     return {
@@ -251,22 +281,93 @@ function readUsersStore() {
 
 let usersStore = readUsersStore();
 
-function persistUsersStore() {
+function readSessionsStore() {
+  const sessions = new Map();
+
+  if (!sessionsConfigPath || !fs.existsSync(sessionsConfigPath)) {
+    return sessions;
+  }
+
+  try {
+    const raw = fs.readFileSync(sessionsConfigPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const loadedSessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+
+    for (const item of loadedSessions) {
+      const normalizedSession = sanitizeLoadedSession(item);
+
+      if (!normalizedSession) {
+        continue;
+      }
+
+      sessions.set(normalizedSession.token, {
+        userId: normalizedSession.userId,
+        createdAt: normalizedSession.createdAt,
+        expiresAt: normalizedSession.expiresAt
+      });
+    }
+
+    return sessions;
+  } catch (error) {
+    console.warn("Failed to read sessions config:", error);
+    return sessions;
+  }
+}
+
+for (const [token, session] of readSessionsStore().entries()) {
+  sessionStore.set(token, session);
+}
+
+function buildUsersStoreSnapshot() {
+  return {
+    users: usersStore.users,
+    createdAt: usersStore.createdAt,
+    updatedAt: usersStore.updatedAt
+  };
+}
+
+function buildSessionsStoreSnapshot() {
+  return {
+    sessions: [...sessionStore.entries()].map(([token, session]) => ({
+      token,
+      userId: session.userId,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt
+    })),
+    updatedAt: Date.now()
+  };
+}
+
+const persistUsersStoreQueued = createQueuedTaskRunner(async (snapshot) => {
+  await writeFileAtomic(usersConfigPath, JSON.stringify(snapshot, null, 2), "utf8");
+});
+
+const persistSessionsStoreQueued = createQueuedTaskRunner(async (snapshot) => {
+  if (!sessionsConfigPath) {
+    return;
+  }
+
+  await writeFileAtomic(sessionsConfigPath, JSON.stringify(snapshot, null, 2), "utf8");
+});
+
+function persistUsersStoreSync() {
   usersStore.updatedAt = Date.now();
 
   fs.writeFileSync(
     usersConfigPath,
-    JSON.stringify(
-      {
-        users: usersStore.users,
-        createdAt: usersStore.createdAt,
-        updatedAt: usersStore.updatedAt
-      },
-      null,
-      2
-    ),
+    JSON.stringify(buildUsersStoreSnapshot(), null, 2),
     "utf8"
   );
+}
+
+async function persistUsersStore() {
+  usersStore.updatedAt = Date.now();
+  await persistUsersStoreQueued(buildUsersStoreSnapshot());
+}
+
+async function persistSessionsStore() {
+  pruneExpiredSessions();
+  await persistSessionsStoreQueued(buildSessionsStoreSnapshot());
 }
 
 function createStoredUser({ username, password, role = "user" }) {
@@ -297,7 +398,6 @@ function createStoredUser({ username, password, role = "user" }) {
   };
 
   usersStore.users.push(user);
-  persistUsersStore();
 
   return user;
 }
@@ -321,13 +421,14 @@ function ensureDefaultAdminUser() {
       password: defaultAdminPassword,
       role: "admin"
     });
+    persistUsersStoreSync();
     return;
   }
 
   if (existingAdmin.role !== "admin") {
     existingAdmin.role = "admin";
     existingAdmin.updatedAt = Date.now();
-    persistUsersStore();
+    persistUsersStoreSync();
   }
 }
 
@@ -359,15 +460,24 @@ function getUserByUsername(username) {
   return usersStore.users.find((user) => user.usernameLower === usernameLower) || null;
 }
 
-function invalidateUserSessions(userId) {
+async function invalidateUserSessions(userId) {
+  let changed = false;
+
   for (const [token, session] of sessionStore.entries()) {
     if (session?.userId === userId) {
       sessionStore.delete(token);
+      changed = true;
     }
   }
+
+  if (changed) {
+    await persistSessionsStore();
+  }
+
+  return changed;
 }
 
-function createUserSession(response, user) {
+async function createUserSession(response, user) {
   const token = generateSessionToken();
   const now = Date.now();
   const expiresAt = now + sessionTtlMs;
@@ -377,6 +487,14 @@ function createUserSession(response, user) {
     createdAt: now,
     expiresAt
   });
+
+  try {
+    await persistSessionsStore();
+  } catch (error) {
+    sessionStore.delete(token);
+    throw error;
+  }
+
   setSessionCookie(response, token, sessionTtlMs);
 
   return {
@@ -396,6 +514,7 @@ function getAuthenticatedUser(request) {
 
   if (!user || user.disabled) {
     sessionStore.delete(sessionRecord.token);
+    void persistSessionsStore();
     return null;
   }
 
@@ -403,6 +522,22 @@ function getAuthenticatedUser(request) {
     sessionRecord,
     user
   };
+}
+
+async function destroySession(token) {
+  const normalizedToken = String(token || "").trim();
+
+  if (!normalizedToken) {
+    return false;
+  }
+
+  const deleted = sessionStore.delete(normalizedToken);
+
+  if (deleted) {
+    await persistSessionsStore();
+  }
+
+  return deleted;
 }
 
 function requireAuth(request, response, next) {
@@ -449,10 +584,12 @@ function requireAdmin(request, response, next) {
     getUserByUsername,
     invalidateUserSessions,
     createUserSession,
+    destroySession,
     getAuthenticatedUser,
     requireAuth,
     requireAdmin,
     clearSessionCookie,
+    persistSessionsStore,
     toPublicUser,
     normalizeUsername
   };

@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const { createQueuedTaskRunner, writeFileAtomic } = require("../utils/atomic-file");
 
 function createRuntimeConfigStore(options) {
   const {
@@ -215,33 +216,33 @@ function createRuntimeConfigStore(options) {
     };
   }
 
-  function persistRuntimeConfig(config) {
-    fs.writeFileSync(
-      runtimeConfigPath,
-      JSON.stringify(
-        {
-          apiConfigs: config.apiConfigs.map((item) => ({
-            id: item.id,
-            name: item.name,
-            apiBaseUrl: item.apiBaseUrl,
-            apiKey: item.apiKey,
-            enabled: Boolean(item.enabled)
-          }))
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
+  function buildRuntimeConfigSnapshot(config) {
+    return {
+      apiConfigs: config.apiConfigs.map((item) => ({
+        id: item.id,
+        name: item.name,
+        apiBaseUrl: item.apiBaseUrl,
+        apiKey: item.apiKey,
+        enabled: Boolean(item.enabled)
+      }))
+    };
   }
 
-  function updateRuntimeConfig(nextValues) {
+  const persistRuntimeConfigQueued = createQueuedTaskRunner(async (snapshot) => {
+    await writeFileAtomic(runtimeConfigPath, JSON.stringify(snapshot, null, 2), "utf8");
+  });
+
+  async function persistRuntimeConfig(config) {
+    await persistRuntimeConfigQueued(buildRuntimeConfigSnapshot(config));
+  }
+
+  async function updateRuntimeConfig(nextValues) {
     const nextConfig = {
       apiConfigs: normalizeApiConfigList(nextValues.apiConfigs)
     };
 
     runtimeConfig.apiConfigs = nextConfig.apiConfigs;
-    persistRuntimeConfig(runtimeConfig);
+    await persistRuntimeConfig(runtimeConfig);
 
     return {
       apiConfigs: getApiConfigs()

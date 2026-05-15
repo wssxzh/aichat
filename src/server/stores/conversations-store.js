@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const { createQueuedTaskRunner, writeFileAtomic } = require("../utils/atomic-file");
 
 function createConversationsStore(options) {
   const {
@@ -158,6 +159,7 @@ function sanitizeUserConversationsState(input) {
   return {
     conversations,
     activeConversationId: resolvedActiveConversationId,
+    revision: Math.max(0, Number(input?.revision) || 0),
     updatedAt: Number(input?.updatedAt) || Date.now()
   };
 }
@@ -204,22 +206,21 @@ function readConversationsStore() {
 
 let conversationsStore = readConversationsStore();
 
-function persistConversationsStore() {
-  conversationsStore.updatedAt = Date.now();
+function buildConversationsStoreSnapshot() {
+  return {
+    users: conversationsStore.users,
+    createdAt: conversationsStore.createdAt,
+    updatedAt: conversationsStore.updatedAt
+  };
+}
 
-  fs.writeFileSync(
-    conversationsConfigPath,
-    JSON.stringify(
-      {
-        users: conversationsStore.users,
-        createdAt: conversationsStore.createdAt,
-        updatedAt: conversationsStore.updatedAt
-      },
-      null,
-      2
-    ),
-    "utf8"
-  );
+const persistConversationsStoreQueued = createQueuedTaskRunner(async (snapshot) => {
+  await writeFileAtomic(conversationsConfigPath, JSON.stringify(snapshot, null, 2), "utf8");
+});
+
+async function persistConversationsStore() {
+  conversationsStore.updatedAt = Date.now();
+  await persistConversationsStoreQueued(buildConversationsStoreSnapshot());
 }
 
 function getUserConversationsState(userId) {
@@ -236,8 +237,10 @@ function getUserConversationsState(userId) {
   return sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
 }
 
-function saveUserConversationsState(userId, payload) {
+async function saveUserConversationsState(userId, payload, options = {}) {
   const normalizedUserId = String(userId || "").trim();
+  const hasExpectedRevision = options.expectedRevision !== undefined && options.expectedRevision !== null;
+  const expectedRevision = Number(options.expectedRevision);
 
   if (!normalizedUserId) {
     const userIdError = new Error("Invalid user id");
@@ -246,22 +249,46 @@ function saveUserConversationsState(userId, payload) {
   }
 
   const previousState = sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
+
+  if (hasExpectedRevision) {
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      const revisionError = new Error("Invalid conversation revision");
+      revisionError.status = 400;
+      throw revisionError;
+    }
+
+    if (previousState.revision !== expectedRevision) {
+      const conflictError = new Error("Conversation state changed in another session.");
+      conflictError.status = 409;
+      conflictError.code = "CONVERSATION_REVISION_CONFLICT";
+      conflictError.currentState = previousState;
+      throw conflictError;
+    }
+  } else if (previousState.revision > 0) {
+    const conflictError = new Error("Conversation revision is required.");
+    conflictError.status = 409;
+    conflictError.code = "CONVERSATION_REVISION_CONFLICT";
+    conflictError.currentState = previousState;
+    throw conflictError;
+  }
+
   const sanitized = sanitizeUserConversationsState(payload);
   conversationsStore.users[normalizedUserId] = {
     ...sanitized,
+    revision: previousState.revision + 1,
     updatedAt: Date.now()
   };
-  persistConversationsStore();
+  await persistConversationsStore();
 
   const nextState = sanitizeUserConversationsState(conversationsStore.users[normalizedUserId]);
 
   if (typeof onUserConversationsStateSaved === "function") {
     try {
-      onUserConversationsStateSaved({
+      await Promise.resolve(onUserConversationsStateSaved({
         userId: normalizedUserId,
         previousState,
         nextState
-      });
+      }));
     } catch (error) {
       console.warn("Failed to run conversations post-save hook:", error);
     }

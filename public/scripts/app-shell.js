@@ -227,6 +227,7 @@ const state = {
     pendingSaveReject: null,
     saveVersion: 0,
     lastSavedVersion: 0,
+    remoteRevision: 0,
     currentAccountKey: defaultConversationAccountKey
   },
   configForm: {
@@ -901,6 +902,111 @@ function isAuthenticatedConversationAccount(accountKey = state.conversationAccou
   return typeof accountKey === "string" && accountKey.startsWith("user:");
 }
 
+function normalizeConversationRevision(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function mergeConversationMessages(localMessages = [], remoteMessages = []) {
+  const mergedMessages = new Map();
+
+  for (const [index, message] of [...remoteMessages, ...localMessages].entries()) {
+    const normalizedMessage = sanitizeStoredMessage(message);
+    const messageKey =
+      normalizedMessage.id ||
+      `${normalizedMessage.role}:${normalizedMessage.timestamp}:${index}`;
+
+    mergedMessages.set(messageKey, normalizedMessage);
+  }
+
+  return [...mergedMessages.values()].sort((left, right) => {
+    if (left.timestamp !== right.timestamp) {
+      return left.timestamp - right.timestamp;
+    }
+
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  });
+}
+
+function mergeConversationRecord(localConversation, remoteConversation) {
+  const normalizedLocal = sanitizeStoredConversation(localConversation);
+  const normalizedRemote = sanitizeStoredConversation(remoteConversation);
+  const preferred =
+    normalizedLocal.updatedAt >= normalizedRemote.updatedAt
+      ? normalizedLocal
+      : normalizedRemote;
+  const fallback = preferred === normalizedLocal ? normalizedRemote : normalizedLocal;
+
+  return {
+    ...fallback,
+    ...preferred,
+    createdAt: Math.min(normalizedLocal.createdAt, normalizedRemote.createdAt),
+    updatedAt: Math.max(normalizedLocal.updatedAt, normalizedRemote.updatedAt),
+    messages: mergeConversationMessages(normalizedLocal.messages, normalizedRemote.messages)
+  };
+}
+
+function mergeConversationStatePayloads(localPayload = {}, remotePayload = {}) {
+  const localConversations = Array.isArray(localPayload?.conversations)
+    ? localPayload.conversations.map(sanitizeStoredConversation)
+    : [];
+  const remoteConversations = Array.isArray(remotePayload?.conversations)
+    ? remotePayload.conversations.map(sanitizeStoredConversation)
+    : [];
+  const mergedConversations = new Map();
+
+  for (const conversation of remoteConversations) {
+    mergedConversations.set(conversation.id, conversation);
+  }
+
+  for (const conversation of localConversations) {
+    const existingConversation = mergedConversations.get(conversation.id);
+
+    mergedConversations.set(
+      conversation.id,
+      existingConversation
+        ? mergeConversationRecord(conversation, existingConversation)
+        : conversation
+    );
+  }
+
+  const conversations = sortConversations([...mergedConversations.values()]);
+  const preferredActiveConversationId =
+    typeof localPayload?.activeConversationId === "string" &&
+    conversations.some((conversation) => conversation.id === localPayload.activeConversationId)
+      ? localPayload.activeConversationId
+      : (typeof remotePayload?.activeConversationId === "string" &&
+        conversations.some((conversation) => conversation.id === remotePayload.activeConversationId)
+          ? remotePayload.activeConversationId
+          : (conversations[0]?.id || ""));
+
+  return {
+    conversations,
+    activeConversationId: preferredActiveConversationId,
+    revision: normalizeConversationRevision(remotePayload?.revision),
+    updatedAt: Math.max(
+      Number(localPayload?.updatedAt) || 0,
+      Number(remotePayload?.updatedAt) || 0
+    )
+  };
+}
+
+function refreshConversationUiAfterRemoteStateChange() {
+  syncConversationControls();
+  renderConversationList();
+  renderModelSelect();
+  renderImageModelSelect();
+  renderImageGenerationControls();
+  renderImageGenerationResults();
+  renderModelList();
+  updateSelectedModelView();
+  renderMessages();
+
+  if (typeof loadWorkspaceFilesForActiveConversation === "function") {
+    void loadWorkspaceFilesForActiveConversation({ preserveBanner: true });
+  }
+}
+
 function buildConversationStatePayload() {
   return {
     conversations: state.conversations.map((conversation) => ({
@@ -910,7 +1016,8 @@ function buildConversationStatePayload() {
         streaming: false
       }))
     })),
-    activeConversationId: state.activeConversationId || ""
+    activeConversationId: state.activeConversationId || "",
+    baseRevision: state.conversationSync.remoteRevision
   };
 }
 
@@ -923,6 +1030,7 @@ function applyConversationStateFromPayload(payload = {}) {
 
   state.conversations = nextConversations;
   state.activeConversationId = nextActiveConversationId;
+  state.conversationSync.remoteRevision = normalizeConversationRevision(payload?.revision);
   ensureConversationState();
   synchronizeConversationModels();
 }
@@ -992,10 +1100,20 @@ async function saveRemoteConversationStateNow() {
         throw new Error("登录状态已失效，请重新登录。");
       }
 
+      if (response.status === 409 && result?.code === "CONVERSATION_REVISION_CONFLICT") {
+        const mergedPayload = mergeConversationStatePayloads(payload, result);
+        applyConversationStateFromPayload(mergedPayload);
+        refreshConversationUiAfterRemoteStateChange();
+        setInlineBanner("检测到其他标签页或设备已更新会话，当前修改已自动合并并重新同步。", "warning");
+        queueRemoteConversationSave();
+        return false;
+      }
+
       if (!response.ok) {
         throw new Error(parseErrorPayload(result, "保存云端会话失败。"));
       }
 
+      state.conversationSync.remoteRevision = normalizeConversationRevision(result?.revision);
       state.conversationSync.lastSavedVersion = state.conversationSync.saveVersion;
       return true;
     } catch (error) {
@@ -1131,6 +1249,7 @@ function loadStoredActiveConversationId(accountKey = state.conversationAccountKe
 async function loadConversationStateForAccount(accountKey) {
   state.conversationAccountKey = accountKey || defaultConversationAccountKey;
   state.conversationSync.currentAccountKey = state.conversationAccountKey;
+  state.conversationSync.remoteRevision = 0;
   state.announcements.dismissedLatestId = getDismissedAnnouncementIdForAccount(state.conversationAccountKey);
   state.openRecentMenuConversationId = "";
   state.recentList.loadedCount = 0;

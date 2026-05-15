@@ -9,7 +9,13 @@ function registerApiRoutes(app, dependencies) {
       webSearchServerEnabled,
       webSearchResultCount,
       maxWorkspaceFilesPerRequest,
-      maxWorkspaceFileSizeBytes
+      maxWorkspaceFileSizeBytes,
+      authRateLimitWindowMs,
+      authRateLimitMaxAttemptsPerIp,
+      authRateLimitMaxAttemptsPerUser,
+      authLockoutMs,
+      registerRateLimitWindowMs,
+      registerRateLimitMaxAttemptsPerIp
     },
     authService: {
       requireAuth,
@@ -20,6 +26,7 @@ function registerApiRoutes(app, dependencies) {
       validatePassword,
       createStoredUser,
       createUserSession,
+      destroySession,
       getUserByUsername,
       verifyPassword,
       persistUsersStore,
@@ -35,6 +42,7 @@ function registerApiRoutes(app, dependencies) {
     announcementsStore: {
       listAnnouncements,
       toPublicAnnouncement,
+      persistAnnouncementsStore,
       createStoredAnnouncement,
       removeStoredAnnouncement
     },
@@ -95,6 +103,167 @@ function registerApiRoutes(app, dependencies) {
       files: maxWorkspaceFilesPerRequest
     }
   });
+
+  const authAttemptStore = {
+    loginByIp: new Map(),
+    loginByUser: new Map(),
+    registerByIp: new Map()
+  };
+
+function getRequestIpAddress(request) {
+  const forwardedFor = String(request.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)[0];
+
+  return (
+    forwardedFor ||
+    request.ip ||
+    request.socket?.remoteAddress ||
+    "unknown"
+  );
+}
+
+function normalizeAttemptKey(value, fallback) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || fallback;
+}
+
+function pruneExpiredAttemptEntries(store, windowMs) {
+  const now = Date.now();
+
+  for (const [key, record] of store.entries()) {
+    if (!record) {
+      store.delete(key);
+      continue;
+    }
+
+    if (Number(record.lockedUntil || 0) > now) {
+      continue;
+    }
+
+    if (now - Number(record.windowStartedAt || 0) > windowMs) {
+      store.delete(key);
+    }
+  }
+}
+
+function getAttemptRecord(store, key, windowMs) {
+  pruneExpiredAttemptEntries(store, windowMs);
+
+  const normalizedKey = normalizeAttemptKey(key, "unknown");
+  const now = Date.now();
+  let record = store.get(normalizedKey);
+
+  if (!record || now - Number(record.windowStartedAt || 0) > windowMs) {
+    record = {
+      attempts: 0,
+      windowStartedAt: now,
+      lockedUntil: 0
+    };
+    store.set(normalizedKey, record);
+  }
+
+  return record;
+}
+
+function createRateLimitError(detail, retryAfterMs) {
+  const error = new Error(detail);
+  error.status = 429;
+  error.code = "AUTH_RATE_LIMITED";
+  error.retryAfterMs = Math.max(1000, Number(retryAfterMs) || 1000);
+  return error;
+}
+
+function assertAttemptAllowed(store, key, windowMs, detail) {
+  const record = getAttemptRecord(store, key, windowMs);
+  const now = Date.now();
+
+  if (Number(record.lockedUntil || 0) > now) {
+    throw createRateLimitError(detail, record.lockedUntil - now);
+  }
+}
+
+function recordAttemptFailure(store, key, maxAttempts, windowMs, lockoutMs) {
+  const record = getAttemptRecord(store, key, windowMs);
+  record.attempts += 1;
+
+  if (record.attempts >= maxAttempts) {
+    record.lockedUntil = Date.now() + lockoutMs;
+    record.attempts = 0;
+    record.windowStartedAt = Date.now();
+  }
+}
+
+function clearAttemptRecord(store, key) {
+  store.delete(normalizeAttemptKey(key, "unknown"));
+}
+
+function enforceLoginGuards(request, username) {
+  const ipAddress = getRequestIpAddress(request);
+  const normalizedUsername = normalizeAttemptKey(username, "anonymous");
+
+  assertAttemptAllowed(
+    authAttemptStore.loginByIp,
+    ipAddress,
+    authRateLimitWindowMs,
+    "Too many login attempts from this address. Please try again later."
+  );
+  assertAttemptAllowed(
+    authAttemptStore.loginByUser,
+    normalizedUsername,
+    authRateLimitWindowMs,
+    "Too many login attempts for this account. Please try again later."
+  );
+}
+
+function recordLoginFailure(request, username) {
+  const ipAddress = getRequestIpAddress(request);
+  const normalizedUsername = normalizeAttemptKey(username, "anonymous");
+
+  recordAttemptFailure(
+    authAttemptStore.loginByIp,
+    ipAddress,
+    authRateLimitMaxAttemptsPerIp,
+    authRateLimitWindowMs,
+    authLockoutMs
+  );
+  recordAttemptFailure(
+    authAttemptStore.loginByUser,
+    normalizedUsername,
+    authRateLimitMaxAttemptsPerUser,
+    authRateLimitWindowMs,
+    authLockoutMs
+  );
+}
+
+function clearLoginFailures(request, username) {
+  clearAttemptRecord(authAttemptStore.loginByIp, getRequestIpAddress(request));
+  clearAttemptRecord(authAttemptStore.loginByUser, username);
+}
+
+function enforceRegisterGuard(request) {
+  assertAttemptAllowed(
+    authAttemptStore.registerByIp,
+    getRequestIpAddress(request),
+    registerRateLimitWindowMs,
+    "Too many registration attempts from this address. Please try again later."
+  );
+}
+
+function recordRegisterFailure(request) {
+  recordAttemptFailure(
+    authAttemptStore.registerByIp,
+    getRequestIpAddress(request),
+    registerRateLimitMaxAttemptsPerIp,
+    registerRateLimitWindowMs,
+    authLockoutMs
+  );
+}
+
+function clearRegisterFailures(request) {
+  clearAttemptRecord(authAttemptStore.registerByIp, getRequestIpAddress(request));
+}
 
 function resolveRequestApiConfig(sourceApiId) {
   const enabledApiConfigs = getEnabledApiConfigs();
@@ -236,8 +405,9 @@ app.get("/api/auth/status", (request, response) => {
   });
 });
 
-app.post("/api/auth/register", (request, response, next) => {
+app.post("/api/auth/register", async (request, response, next) => {
   try {
+    enforceRegisterGuard(request);
     const username = validateUsername(request.body?.username);
     const password = validatePassword(request.body?.password);
     const user = createStoredUser({
@@ -245,7 +415,9 @@ app.post("/api/auth/register", (request, response, next) => {
       password,
       role: "user"
     });
-    const session = createUserSession(response, user);
+    await persistUsersStore();
+    clearRegisterFailures(request);
+    const session = await createUserSession(response, user);
 
     response.status(201).json({
       authenticated: true,
@@ -254,17 +426,26 @@ app.post("/api/auth/register", (request, response, next) => {
       message: "注册成功，已自动登录。"
     });
   } catch (error) {
+    if (Number(error?.status) !== 429) {
+      recordRegisterFailure(request);
+    }
+
+    error.status = error.status || 400;
     next(error);
   }
 });
 
-app.post("/api/auth/login", (request, response, next) => {
+app.post("/api/auth/login", async (request, response, next) => {
+  const rawUsername = request.body?.username;
+
   try {
-    const username = validateUsername(request.body?.username);
+    enforceLoginGuards(request, rawUsername);
+    const username = validateUsername(rawUsername);
     const password = validatePassword(request.body?.password);
     const user = getUserByUsername(username);
 
     if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) {
+      recordLoginFailure(request, username);
       return response.status(401).json({
         error: "登录失败",
         detail: "用户名或密码错误。"
@@ -272,6 +453,7 @@ app.post("/api/auth/login", (request, response, next) => {
     }
 
     if (user.disabled) {
+      recordLoginFailure(request, username);
       return response.status(403).json({
         error: "账号不可用",
         detail: "该账号已被禁用，请联系管理员。"
@@ -280,8 +462,9 @@ app.post("/api/auth/login", (request, response, next) => {
 
     user.lastLoginAt = Date.now();
     user.updatedAt = Date.now();
-    persistUsersStore();
-    const session = createUserSession(response, user);
+    await persistUsersStore();
+    clearLoginFailures(request, username);
+    const session = await createUserSession(response, user);
 
     response.json({
       authenticated: true,
@@ -290,6 +473,11 @@ app.post("/api/auth/login", (request, response, next) => {
       message: "登录成功。"
     });
   } catch (error) {
+    if (Number(error?.status) !== 429) {
+      recordLoginFailure(request, rawUsername);
+    }
+
+    error.status = error.status || 400;
     next(error);
   }
 });
@@ -298,20 +486,22 @@ app.post("/api/auth/logout", (request, response) => {
   const auth = getAuthenticatedUser(request);
 
   if (auth?.sessionRecord?.token) {
-    sessionStore.delete(auth.sessionRecord.token);
+    void destroySession(auth.sessionRecord.token).catch((error) => {
+      console.warn("Failed to persist logout session removal:", error);
+    });
   }
 
-  clearSessionCookie(response);
-  response.json({
-    authenticated: false,
+    clearSessionCookie(response);
+    response.json({
+      authenticated: false,
     message: "已退出登录。"
-  });
+    });
 });
 
 app.get("/api/announcements", requireAuth, (request, response) => {
-  response.json({
+      response.json({
     announcements: listAnnouncements(1).map(toPublicAnnouncement)
-  });
+      });
 });
 
 app.get("/api/conversations", requireAuth, (request, response) => {
@@ -319,31 +509,52 @@ app.get("/api/conversations", requireAuth, (request, response) => {
 
   response.json({
     conversations: conversationState.conversations,
-    activeConversationId: conversationState.activeConversationId
+    activeConversationId: conversationState.activeConversationId,
+    revision: conversationState.revision,
+    updatedAt: conversationState.updatedAt
   });
 });
 
-app.put("/api/conversations", requireAuth, (request, response, next) => {
+app.put("/api/conversations", requireAuth, async (request, response, next) => {
   try {
-    const savedState = saveUserConversationsState(request.currentUser.id, {
-      conversations: request.body?.conversations,
-      activeConversationId: request.body?.activeConversationId
-    });
+    const savedState = await saveUserConversationsState(
+      request.currentUser.id,
+      {
+        conversations: request.body?.conversations,
+        activeConversationId: request.body?.activeConversationId
+      },
+      {
+        expectedRevision: request.body?.baseRevision
+      }
+    );
 
     response.json({
       conversations: savedState.conversations,
       activeConversationId: savedState.activeConversationId,
+      revision: savedState.revision,
       updatedAt: savedState.updatedAt
     });
   } catch (error) {
+    if (error?.code === "CONVERSATION_REVISION_CONFLICT" && error?.currentState) {
+      return response.status(409).json({
+        error: "云端会话已更新",
+        detail: "检测到其他标签页或设备已修改当前会话，已拒绝直接覆盖，请先合并后再重试。",
+        code: error.code,
+        conversations: error.currentState.conversations,
+        activeConversationId: error.currentState.activeConversationId,
+        revision: error.currentState.revision,
+        updatedAt: error.currentState.updatedAt
+      });
+    }
+
     next(error);
   }
 });
 
-app.get("/api/conversations/:conversationId/workspace/files", requireAuth, (request, response, next) => {
+app.get("/api/conversations/:conversationId/workspace/files", requireAuth, async (request, response, next) => {
   try {
     response.json({
-      files: listWorkspaceFiles(request.currentUser.id, request.params.conversationId)
+      files: await listWorkspaceFiles(request.currentUser.id, request.params.conversationId)
     });
   } catch (error) {
     next(error);
@@ -383,9 +594,9 @@ app.post(
   }
 );
 
-app.delete("/api/conversations/:conversationId/workspace/files/:fileId", requireAuth, (request, response, next) => {
+app.delete("/api/conversations/:conversationId/workspace/files/:fileId", requireAuth, async (request, response, next) => {
   try {
-    const removedFile = deleteWorkspaceFile(
+    const removedFile = await deleteWorkspaceFile(
       request.currentUser.id,
       request.params.conversationId,
       request.params.fileId
@@ -400,7 +611,7 @@ app.delete("/api/conversations/:conversationId/workspace/files/:fileId", require
 
     response.json({
       file: removedFile,
-      files: listWorkspaceFiles(request.currentUser.id, request.params.conversationId),
+      files: await listWorkspaceFiles(request.currentUser.id, request.params.conversationId),
       message: "工作区文件已删除。"
     });
   } catch (error) {
@@ -416,13 +627,14 @@ app.get("/api/admin/announcements", (request, response) => {
   });
 });
 
-app.post("/api/admin/announcements", (request, response, next) => {
+app.post("/api/admin/announcements", async (request, response, next) => {
   try {
     const announcement = createStoredAnnouncement({
       title: request.body?.title,
       content: request.body?.content,
       author: request.currentUser
     });
+    await persistAnnouncementsStore();
 
     response.status(201).json({
       message: "公告发布成功。",
@@ -434,7 +646,7 @@ app.post("/api/admin/announcements", (request, response, next) => {
   }
 });
 
-app.delete("/api/admin/announcements/:id", (request, response) => {
+app.delete("/api/admin/announcements/:id", (request, response, next) => {
   const announcementId = String(request.params.id || "").trim();
 
   if (!announcementId) {
@@ -453,6 +665,10 @@ app.delete("/api/admin/announcements/:id", (request, response) => {
     });
   }
 
+  void persistAnnouncementsStore().catch((error) => {
+    console.warn("Failed to persist announcement removal:", error);
+  });
+
   response.json({
     message: "公告已删除。"
   });
@@ -462,9 +678,9 @@ app.get("/api/admin/config", (request, response) => {
   response.json(serializeConfigForClient(true));
 });
 
-app.post("/api/admin/config", (request, response, next) => {
+app.post("/api/admin/config", async (request, response, next) => {
   try {
-    updateRuntimeConfig(readConfigFromBody(request.body));
+    await updateRuntimeConfig(readConfigFromBody(request.body));
 
     response.json({
       message: "配置已保存。",
@@ -518,13 +734,14 @@ app.get("/api/admin/users", (request, response) => {
   });
 });
 
-app.post("/api/admin/users", (request, response, next) => {
+app.post("/api/admin/users", async (request, response, next) => {
   try {
     const user = createStoredUser({
       username: request.body?.username,
       password: request.body?.password,
       role: normalizeRole(request.body?.role)
     });
+    await persistUsersStore();
 
     response.status(201).json({
       message: "用户创建成功。",
@@ -535,7 +752,7 @@ app.post("/api/admin/users", (request, response, next) => {
   }
 });
 
-app.patch("/api/admin/users/:id", (request, response, next) => {
+app.patch("/api/admin/users/:id", async (request, response, next) => {
   try {
     const targetUser = getUserById(String(request.params.id || ""));
 
@@ -585,11 +802,11 @@ app.patch("/api/admin/users/:id", (request, response, next) => {
       const passwordRecord = createPasswordRecord(validatedPassword);
       targetUser.passwordSalt = passwordRecord.salt;
       targetUser.passwordHash = passwordRecord.hash;
-      invalidateUserSessions(targetUser.id);
+      await invalidateUserSessions(targetUser.id);
     }
 
     targetUser.updatedAt = Date.now();
-    persistUsersStore();
+    await persistUsersStore();
 
     response.json({
       message: "用户已更新。",
@@ -600,7 +817,7 @@ app.patch("/api/admin/users/:id", (request, response, next) => {
   }
 });
 
-app.delete("/api/admin/users/:id", (request, response, next) => {
+app.delete("/api/admin/users/:id", async (request, response, next) => {
   try {
     const userId = String(request.params.id || "");
     const targetUser = getUserById(userId);
@@ -629,13 +846,13 @@ app.delete("/api/admin/users/:id", (request, response, next) => {
     }
 
     usersStore.users = projectedUsers;
-    persistUsersStore();
+    await persistUsersStore();
     if (conversationsStore.users[targetUser.id]) {
       delete conversationsStore.users[targetUser.id];
-      persistConversationsStore();
+      await persistConversationsStore();
     }
-    deleteUserWorkspaceData(targetUser.id);
-    invalidateUserSessions(targetUser.id);
+    await deleteUserWorkspaceData(targetUser.id);
+    await invalidateUserSessions(targetUser.id);
 
     response.json({
       message: "用户已删除。"

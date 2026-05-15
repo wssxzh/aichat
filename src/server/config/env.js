@@ -85,6 +85,9 @@ const env = {
   usersConfigPath: process.env.USERS_CONFIG_PATH
     ? path.resolve(process.env.USERS_CONFIG_PATH)
     : path.join(rootDir, ".runtime-users.json"),
+  sessionsConfigPath: process.env.SESSIONS_CONFIG_PATH
+    ? path.resolve(process.env.SESSIONS_CONFIG_PATH)
+    : path.join(rootDir, ".runtime-sessions.json"),
   announcementsConfigPath: process.env.ANNOUNCEMENTS_CONFIG_PATH
     ? path.resolve(process.env.ANNOUNCEMENTS_CONFIG_PATH)
     : path.join(rootDir, ".runtime-announcements.json"),
@@ -151,6 +154,30 @@ const env = {
   sessionTtlMs: Math.max(
     5 * 60 * 1000,
     Number(process.env.SESSION_TTL_MS || process.env.ADMIN_SESSION_TTL_MS) || 8 * 60 * 60 * 1000
+  ),
+  authRateLimitWindowMs: Math.max(
+    15 * 1000,
+    Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS) || 10 * 60 * 1000
+  ),
+  authRateLimitMaxAttemptsPerIp: Math.max(
+    3,
+    Number(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS_PER_IP) || 20
+  ),
+  authRateLimitMaxAttemptsPerUser: Math.max(
+    3,
+    Number(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS_PER_USER) || 8
+  ),
+  authLockoutMs: Math.max(
+    30 * 1000,
+    Number(process.env.AUTH_LOCKOUT_MS) || 15 * 60 * 1000
+  ),
+  registerRateLimitWindowMs: Math.max(
+    15 * 1000,
+    Number(process.env.REGISTER_RATE_LIMIT_WINDOW_MS) || 10 * 60 * 1000
+  ),
+  registerRateLimitMaxAttemptsPerIp: Math.max(
+    2,
+    Number(process.env.REGISTER_RATE_LIMIT_MAX_ATTEMPTS_PER_IP) || 10
   ),
   sessionCookieSecure:
     String(process.env.SESSION_COOKIE_SECURE || process.env.ADMIN_COOKIE_SECURE || "").toLowerCase() === "true",

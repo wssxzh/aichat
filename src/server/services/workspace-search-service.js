@@ -455,13 +455,13 @@ function createWorkspaceSearchService(options) {
       chunkCount: chunks.length,
       characterCount: extractedText.length
     };
-    const storedFile = workspacesStore.writeWorkspaceFileBuffer(
+    const storedFile = await workspacesStore.writeWorkspaceFileBuffer(
       userId,
       conversationId,
       fileRecord,
       buffer
     );
-    const currentIndex = workspacesStore.readWorkspaceIndex(userId, conversationId);
+    const currentIndex = await workspacesStore.readWorkspaceIndex(userId, conversationId);
     const nextFiles = [...currentIndex.files, storedFile];
     const nextChunks = [
       ...currentIndex.chunks,
@@ -477,7 +477,7 @@ function createWorkspaceSearchService(options) {
       }))
     ];
 
-    workspacesStore.writeWorkspaceIndex(userId, conversationId, {
+    await workspacesStore.writeWorkspaceIndex(userId, conversationId, {
       ...currentIndex,
       files: nextFiles,
       chunks: nextChunks
@@ -488,7 +488,7 @@ function createWorkspaceSearchService(options) {
 
   async function uploadWorkspaceFiles(userId, conversationId, files = []) {
     const workspaceId = sanitizeConversationId(conversationId);
-    const currentFiles = workspacesStore.listWorkspaceFiles(userId, workspaceId);
+    const currentFiles = await workspacesStore.listWorkspaceFiles(userId, workspaceId);
     let remainingSlots = Math.max(0, maxWorkspaceFilesPerConversation - currentFiles.length);
     const uploaded = [];
     const failed = [];
@@ -516,16 +516,17 @@ function createWorkspaceSearchService(options) {
     return {
       uploaded,
       failed,
-      files: listWorkspaceFiles(userId, workspaceId)
+      files: await listWorkspaceFiles(userId, workspaceId)
     };
   }
 
-  function listWorkspaceFiles(userId, conversationId) {
-    return workspacesStore.listWorkspaceFiles(userId, sanitizeConversationId(conversationId)).map(toPublicWorkspaceFile);
+  async function listWorkspaceFiles(userId, conversationId) {
+    const files = await workspacesStore.listWorkspaceFiles(userId, sanitizeConversationId(conversationId));
+    return files.map(toPublicWorkspaceFile);
   }
 
-  function deleteWorkspaceFile(userId, conversationId, fileId) {
-    const removedFile = workspacesStore.deleteWorkspaceFile(
+  async function deleteWorkspaceFile(userId, conversationId, fileId) {
+    const removedFile = await workspacesStore.deleteWorkspaceFile(
       userId,
       sanitizeConversationId(conversationId),
       String(fileId || "").trim()
@@ -534,9 +535,9 @@ function createWorkspaceSearchService(options) {
     return removedFile ? toPublicWorkspaceFile(removedFile) : null;
   }
 
-  function searchWorkspaceChunks(userId, conversationId, query) {
+  async function searchWorkspaceChunks(userId, conversationId, query) {
     const workspaceId = sanitizeConversationId(conversationId);
-    const index = workspacesStore.readWorkspaceIndex(userId, workspaceId);
+    const index = await workspacesStore.readWorkspaceIndex(userId, workspaceId);
 
     if (!index.files.length || !index.chunks.length) {
       return [];
@@ -581,7 +582,7 @@ function createWorkspaceSearchService(options) {
     }
 
     try {
-      const hits = searchWorkspaceChunks(currentUser.id, conversationId, query);
+      const hits = await searchWorkspaceChunks(currentUser.id, conversationId, query);
 
       if (!hits.length) {
         return payload;
